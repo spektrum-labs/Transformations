@@ -1,65 +1,58 @@
 """
 Transformation: isBehavioralMonitoringValid
-Vendor: Endpoint Protection Platform
+Vendor: Arctic Wolf - EDR Endpoint Security (Aurora Endpoint Defense API)
 Category: Endpoint Security
 
-Evaluates if behavioral monitoring is valid and functioning.
+NOT MEASURED. Every key below returns None with a dataCollection error, so it reads Unevaluated
+-- never Passed, never Failed.
+
+Not measured by this integration. The Arctic Wolf - EDR Endpoint Security definition routes these keys to the
+`checkInstalled` method, which has no request defined in that definition (no url, no HTTP
+method), so no vendor body ever reaches this file.
+
+The Aurora Device API's `background_detection` (Get devices extended, GET /devices/v2) is
+not a substitute: the vendor defines it as true when "the agent is currently running a
+background threat detection scan", a moment-in-time activity, not a monitoring setting.
+Behavioural protection settings (memory protection, script control) live in the Aurora
+Policy API, which this integration does not call.
+
+What this file did before:
+`data.get('isBehavioralMonitoringValid', affirmative_signal(data))` -- a field no
+Arctic Wolf API sends.
+
+Docs: Aurora Endpoint Defense API, https://docs.arcticwolf.com/en/developer-and-oem/aurora-endpoint-defense-api
+(retrieved 2026-10-07).
 """
 
-import json
 from datetime import datetime
 
+KEYS = ("isBehavioralMonitoringValid",)
 
-def extract_input(input_data):
-    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-        return input_data["data"], input_data["validation"]
-    data = input_data
-    if isinstance(data, dict):
-        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
-            unwrapped = False
-            for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
-                    data = data[key]
-                    unwrapped = True
-                    break
-            if not unwrapped:
-                break
-    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+REASON = ("Not measured: this integration calls no Aurora endpoint that reports behavioural "
+          "monitoring settings (they live in the Policy API)")
 
 
-def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
-    if validation is None:
-        validation = {"status": "unknown", "errors": [], "warnings": []}
+def create_response(result, api_errors, input_summary=None):
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
+                "status": "error" if api_errors else "success",
                 "errors": api_errors or []
             },
-            "validation": {
-                "status": validation.get("status", "unknown"),
-                "errors": validation.get("errors", []),
-                "warnings": validation.get("warnings", [])
-            },
-            "transformation": {
-                "status": "error" if (transformation_errors or []) else "success",
-                "errors": transformation_errors or [],
-                "inputSummary": input_summary or {}
-            },
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": input_summary or {}},
             "evaluation": {
-                "passReasons": pass_reasons or [],
-                "failReasons": fail_reasons or [],
-                "recommendations": recommendations or [],
-                "additionalFindings": additional_findings or []
+                "passReasons": [],
+                "failReasons": api_errors or [],
+                "recommendations": [],
+                "additionalFindings": []
             },
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "isBehavioralMonitoringValid",
-                "vendor": "Endpoint Protection Platform",
+                "vendor": "Arctic Wolf",
                 "category": "Endpoint Security"
             }
         }
@@ -67,104 +60,9 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def transform(input):
-    criteriaKey = "isBehavioralMonitoringValid"
-
-    try:
-        if isinstance(input, str):
-            input = json.loads(input)
-        elif isinstance(input, bytes):
-            input = json.loads(input.decode("utf-8"))
-
-        data, validation = extract_input(input)
-
-        if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
-
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        # `data is not None` asked whether a RESPONSE ARRIVED, not what it said, so any
-        # 2xx body -- including one describing the control as OFF -- satisfied this
-        # criterion and no input could make it false. Resolved from the payload now.
-        default_value = affirmative_signal(data)
-
-        is_behavioral_monitoring_valid = False
-        if isinstance(data, dict):
-            is_behavioral_monitoring_valid = data.get('isBehavioralMonitoringValid', default_value)
-        else:
-            is_behavioral_monitoring_valid = default_value
-
-        if is_behavioral_monitoring_valid:
-            pass_reasons.append("Behavioral monitoring is valid and functioning")
-        else:
-            fail_reasons.append("Behavioral monitoring is not valid or not functioning")
-            recommendations.append("Enable and verify behavioral monitoring configuration")
-
-        return create_response(
-            result={criteriaKey: is_behavioral_monitoring_valid},
-            validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            input_summary={"behavioralMonitoringValid": is_behavioral_monitoring_valid}
-        )
-
-    except Exception as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
-
-
-def affirmative_signal(data):
-    """True only when the payload POSITIVELY evidences the control.
-
-    Replaces `data is not None`, which asked whether a response arrived rather than what
-    it said -- so any 2xx body, including one describing the control as OFF, satisfied the
-    criterion and no input could ever make it false. Measured 2026-09-21.
-
-    Deliberately conservative, in this order:
-      * an unreadable, empty or error body           -> False
-      * an explicit OFF among the recognised keys    -> False   (beats any other signal)
-      * an explicit ON among the recognised keys     -> True
-      * a non-empty population of records/settings   -> True
-      * anything unrecognised                        -> False  (never True by default)
-    """
-    if not isinstance(data, dict) or not data:
-        return False
-    for key in ("error", "errors", "errorMessage", "errorType", "fault", "PSError"):
-        if data.get(key):
-            return False
-    on_keys = ("enabled", "isEnabled", "active", "isActive", "configured", "isConfigured",
-               "enforced", "isEnforced", "loggingEnabled", "status", "state", "licensed",
-               "licensePurchased", "subscribed", "subscription")
-    present = [data[k] for k in on_keys if k in data]
-    off_words = ("false", "disabled", "off", "inactive", "none", "expired", "cancelled")
-    on_words = ("true", "enabled", "on", "active", "success", "ok", "valid", "licensed")
-    for value in present:
-        if value is False:
-            return False
-        if isinstance(value, str) and value.strip().lower() in off_words:
-            return False
-    for value in present:
-        if value is True:
-            return True
-        if isinstance(value, str) and value.strip().lower() in on_words:
-            return True
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
-            return True
-    for key in ("value", "items", "data", "records", "results", "logs", "events", "policies",
-                "settings", "configurations", "devices", "agents", "users", "licenses"):
-        value = data.get(key)
-        if isinstance(value, list) and value:
-            return True
-        if isinstance(value, dict) and value:
-            return True
-    return False
+    # No body can change this answer, so the body is not read: a value that is always None
+    # carries its error status with it, on every path including a body whose reads raise.
+    result = {}
+    for key in KEYS:
+        result[key] = None
+    return create_response(result, [REASON])
