@@ -38,7 +38,10 @@ dataCollection "error" (Unevaluated): no envelope, an IS or vendor error, a miss
 run), a block without a numeric meta.pagination.total, a resources list that contradicts its total (ids when the total
 is 0, none when it is above 0, more ids than the total, a non-string id), or counts that disagree with each other:
 openCritical + openHigh must equal openCriticalHigh (catches a severity filter the vendor ignored), and each overdue
-count must not exceed its open count (catches a date filter that widened the set).
+count must not exceed its open count (catches a date filter that widened the set). The five counts are five separate
+calls on a live environment, so instances that open or close between them shift the totals a little (11 in 1,095,324 in
+one environment): both comparisons allow a drift of up to 0.1% of the larger count (exact below 1,000). A split count of 0
+must match exactly (0 passes). An ignored filter moves a total by a whole severity or age band, far past that.
 
 Missing scope (SCOPE-NOT-GRANTED): CrowdStrike answers a client without "Vulnerabilities: Read" with HTTP 403
 {"errors": [{"code": 403, "message": "access denied, scope not permitted"}]}. When the method opts in to
@@ -246,6 +249,11 @@ def block_total(name, block):
     return total, None
 
 
+def within_drift(a, b):
+    """True when two counts of a live environment, read by separate calls, differ by at most 0.1% of the larger."""
+    return abs(a - b) * 1000 <= max(a, b)
+
+
 def measure(data):
     """Return (numbers, None) for five complete, consistent counts, or (None, problem)."""
     if not isinstance(data, dict):
@@ -263,11 +271,17 @@ def measure(data):
         if problem:
             return None, problem
         totals[name] = total
-    if totals["openCritical"] + totals["openHigh"] != totals["openCriticalHigh"]:
+    split = totals["openCritical"] + totals["openHigh"]
+    # A 0 split count is a passing answer, so it is trusted only on an exact match: drift cannot hide a missing band.
+    exact = totals["openCritical"] == 0 or totals["openHigh"] == 0
+    if split != totals["openCriticalHigh"] and (exact or not within_drift(split, totals["openCriticalHigh"])):
         return None, ("Spotlight counts disagree: " + str(totals["openCritical"]) + " critical + "
                       + str(totals["openHigh"]) + " high is not the " + str(totals["openCriticalHigh"])
                       + " open critical+high total; not scored.")
-    if totals["overdueCritical"] > totals["openCritical"] or totals["overdueHigh"] > totals["openHigh"]:
+    if (totals["overdueCritical"] > totals["openCritical"]
+            and not within_drift(totals["overdueCritical"], totals["openCritical"])) \
+            or (totals["overdueHigh"] > totals["openHigh"]
+                and not within_drift(totals["overdueHigh"], totals["openHigh"])):
         return None, "Spotlight counts disagree: an overdue count exceeds its open count; not scored."
     numbers = {
         KEY_CRITICAL: totals["openCritical"],
