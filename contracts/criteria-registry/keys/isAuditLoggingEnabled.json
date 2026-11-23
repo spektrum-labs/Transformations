@@ -219,13 +219,13 @@
   "changeLog": [
     {
       "revision": 1,
-      "date": "2026-10-08",
-      "change": "Registered at V0 so the registry gate can fail push runs on main; contested because the files answer an activity proxy with three recency rules and two empty-read meanings, and one unwired file answers 'an export job was accepted'."
+      "date": "2026-10-15",
+      "change": "Registered so the Vanta proof-source transform can emit it."
     },
     {
       "revision": 2,
       "date": "2026-11-23",
-      "change": "Merge from main had kept main's Vanta-only proposed entry, which would have defined nine activity-proxy emitters by the Vanta/CloudTrail meaning. Restored contested status with the five activity-proxy positions and kept the Vanta reading (main revision 1) in conflict.summary and citations."
+      "change": "Contested: adds the five activity-proxy positions first drafted on 2026-10-08 (three recency rules, two empty-read meanings, and one unwired file answering 'an export job was accepted'); the Vanta reading is kept in conflict.summary."
     }
   ],
   "notes": "Revision 2 restores the contested entry after a merge from main kept the Vanta-only revision 1 (#1291). integrationPolicy is any with no category limit so the Vanta proof-source file, which is cross-category, keeps working; allowedIntegrations lists the integrations whose files were read for the five activity-proxy positions and is informational under any. "
