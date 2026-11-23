@@ -92,6 +92,15 @@ def test_critical_systems_without_servers_is_not_answered():
     assert "isEPPEnabledForCriticalSystems" in findings and "isEPPLoggingEnabled" in findings
 
 
+def test_mobile_only_list_leaves_edr_keys_out():
+    # no computer or server to judge: absent keys, never a present None (graded a measured failure, #981)
+    out = EPP.transform({"items": [endpoint("mobile", FULL)]})
+    tr = out["transformedResponse"]
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+    assert "isEDRDeployed" not in tr and "edrDeployedPercentage" not in tr
+    assert "isEDRDeployed" in " ".join(out["additionalInfo"]["evaluation"]["additionalFindings"])
+
+
 def test_servers_only_estate_reads_its_protection():
     tr, status = run({"items": [endpoint("server", FULL)]})
     assert status == "success"

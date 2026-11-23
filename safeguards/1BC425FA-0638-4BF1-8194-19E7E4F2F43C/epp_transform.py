@@ -554,10 +554,17 @@ def transform(input):
         # isEDRDeployed: the share of computers and servers with the xdr product installed, against
         # EDR_DEPLOYED_THRESHOLD. It proves the XDR component is on the endpoint, not that the policy
         # setting that sends XDR data to Sophos is on; the endpoint list carries no policy settings.
+        # With no computer or server in the list the two keys are left OUT, not set to None: a present
+        # None travels with a success status and is graded a measured failure (#981), an absent key is
+        # not evaluated.
+        unmeasured = [
+            "isEPPLoggingEnabled is not answered from this method: GET /endpoint/v1/endpoints "
+            "reports no logging, telemetry or data-upload setting"]
         edr_population = total_computers + total_servers
         if edr_population == 0:
-            coverage_scores["edrDeployedPercentage"] = None
-            coverage_scores["isEDRDeployed"] = None
+            unmeasured = unmeasured + [
+                "isEDRDeployed and edrDeployedPercentage are not answered for this tenant: the endpoint "
+                "list holds no computer or server to judge"]
         else:
             coverage_scores["edrDeployedPercentage"] = round(edr_count * 100.0 / edr_population, 2)
             coverage_scores["isEDRDeployed"] = coverage_scores["edrDeployedPercentage"] >= EDR_DEPLOYED_THRESHOLD
@@ -568,9 +575,6 @@ def transform(input):
         # key present with None is compared and graded a measured failure. Never True.
         # Held in a local as well: reading it back by name out of a dict is the shape
         # tools/check_no_self_answer.py forbids.
-        unmeasured = [
-            "isEPPLoggingEnabled is not answered from this method: GET /endpoint/v1/endpoints "
-            "reports no logging, telemetry or data-upload setting"]
         critical_systems = None
         if total_servers > 0:
             critical_systems = server_protection_count == total_servers
