@@ -216,19 +216,17 @@ def is_retrying(row):
 
 
 def stuck_since(finished, row):
-    """When a retrying set first stopped passing: the earliest started/scheduled/lastUpdatedTime among its non-passing
+    """When a retrying set first stopped passing: the earliest one shared time field (as latest_per_set ranks) among its non-passing
     finished rows newer than its newest passing one. None when no row has a usable time (the set stays uncounted)."""
     key = None
     for i, r in enumerate(finished):
         if r is row:
             key = set_key(r, i)
-    times = []
-    for i, r in enumerate(finished):
-        if set_key(r, i) == key:
-            when = None
-            for f in TIME_FIELDS:
-                when = when or parse_time(r.get(f))
-            times.append((when, status_of(r) in PASSING))
+    rows = [r for i, r in enumerate(finished) if set_key(r, i) == key]
+    field = shared_time_field(rows)
+    if field is None:
+        return None
+    times = [(parse_time(r.get(field)), status_of(r) in PASSING) for r in rows]
     last_pass = max([w for w, ok in times if ok and w] or [datetime.min])
     since = [w for w, ok in times if not ok and w and w > last_pass]
     return min(since) if since else None
@@ -246,6 +244,15 @@ def set_key(row, index):
                                              "vm", "resourceType", "configurationMode"))
 
 
+def shared_time_field(rows):
+    """The first of started/scheduled/lastUpdatedTime that every timed row of one set carries, or None, so two kinds of time are never compared."""
+    timed = [r for r in rows if any(parse_time(r.get(f)) for f in TIME_FIELDS)]
+    for candidate in TIME_FIELDS:
+        if timed and all(parse_time(r.get(candidate)) for r in timed):
+            return candidate
+    return None
+
+
 def latest_per_set(finished):
     """Each backup set's newest finished job, so a failure a later retry fixed is not still counted.
     A set's timed rows are all ranked on one time field, the first of started/scheduled/lastUpdatedTime that every timed row carries,
@@ -256,12 +263,7 @@ def latest_per_set(finished):
         sets.setdefault(set_key(row, index), []).append(row)
     latest = []
     for rows in sets.values():
-        timed = [r for r in rows if any(parse_time(r.get(f)) for f in TIME_FIELDS)]
-        field = None
-        for candidate in TIME_FIELDS:
-            if timed and all(parse_time(r.get(candidate)) for r in timed):
-                field = candidate
-                break
+        field = shared_time_field(rows)
         best = None
         for row in rows:
             when = (parse_time(row.get(field)) if field else None) or datetime.min
@@ -326,13 +328,24 @@ def transform(input):
         return unevaluated("Transformation error: " + str(e), None, transformation_errors=[str(e)])
 
 
+def data_time(jobs, meta):
+    """The report's own clock, so replaying a body gives the same answer: lastSyncTimestamp when the envelope carries it, else
+    the newest started/lastUpdatedTime in the rows; the wall clock only when neither parses."""
+    moments = [parse_time(meta.get("lastSyncTimestamp"))]
+    moments += [parse_time(r.get(f)) for r in jobs for f in ("started", "lastUpdatedTime")]
+    moments = [m for m in moments if m]
+    if parse_time(meta.get("lastSyncTimestamp")):
+        return parse_time(meta.get("lastSyncTimestamp"))
+    return max(moments) if moments else datetime.utcnow()
+
+
 def evaluate(jobs, partial, meta, reported):
     """Score each backup set by its latest finished job: Successful and Successful with errors pass, anything else fails."""
     in_flight = [r for r in jobs if is_in_flight(r)]
     finished = [r for r in jobs if not is_in_flight(r)]
     newest = latest_per_set(finished)
     retrying = [r for r in newest if is_retrying(r)]
-    now = datetime.utcnow()
+    now = data_time(jobs, meta)
     since = [stuck_since(finished, r) for r in retrying]
     stale = [r for r, t in zip(retrying, since) if t is not None and now - t > timedelta(hours=RETRY_CUTOFF_HOURS)]
     untimed = [t for t in since if t is None]
