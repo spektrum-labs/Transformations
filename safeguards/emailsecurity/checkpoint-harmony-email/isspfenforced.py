@@ -130,19 +130,28 @@ def transform(input):
         for k, v in body.items():
             if isinstance(k, str) and k.lower() == "spf":
                 spf = v
+        if spf is True or (spf is not None and not isinstance(spf, (str, bool)) and spf):
+            # "yes" without the record text: the all-mechanism and the includes cannot be read.
+            return not_measured("The DNS probe reported SPF as present without the record text; nothing is measured.")
         record = spf.strip() if isinstance(spf, str) else ""
         no_record_markers = ("", "false", "none", "null", "no", "0", "not found", "n/a")
         if spf is None or spf is False or (isinstance(spf, str) and record.lower() in no_record_markers):
             return create_response(False, fail_reasons=["No SPF record is published for the email domain"],
                                    input_summary={"spfRecord": str(spf)})
+        terms = record.split()
+        # RFC 7208 s4.5: the version section is exactly "v=spf1"; a record opening "v=spf10" is
+        # discarded, so the domain publishes no SPF record.
+        if record.lower().startswith("v=spf1") and terms[0].lower() != "v=spf1":
+            return create_response(False, fail_reasons=["No SPF record is published for the email domain"],
+                                   input_summary={"spfRecord": str(spf)})
         if not record.lower().startswith("v=spf1"):
             return not_measured("The DNS probe returned an SPF value that is not an SPF record; nothing is measured.")
-        terms = record.split()
         includes = [t.split(":", 1)[1].lower() for t in terms if t.lower().startswith("include:") and ":" in t]
         cp = [d for d in includes if is_domain_or_subdomain(d, "checkpoint-spf.com") or
               is_domain_or_subdomain(d, "cpmails.com")]
         alls = [t.lower() for t in terms if re.match(r"^[-~?+]?all$", t.lower())]
-        qualifier = alls[-1] if alls else ""
+        # RFC 7208 s4.6.2: the first all-mechanism matches every sender, so it decides.
+        qualifier = alls[0] if alls else ""
         restrictive = qualifier in ("-all", "~all")
         summary = {"spfRecord": record, "checkPointIncludes": cp, "allMechanism": qualifier or "none"}
         if cp and restrictive:
@@ -153,7 +162,7 @@ def transform(input):
             reasons.append("The SPF record has no Check Point include (checkpoint-spf.com or cpmails.com), so mail "
                            "Check Point sends for the domain fails SPF")
         if not restrictive:
-            reasons.append("The SPF record ends in " + (qualifier or "no all-mechanism") +
+            reasons.append("The first all-mechanism in the SPF record is " + (qualifier or "absent") +
                            ", which does not restrict unlisted senders")
         return create_response(False, fail_reasons=reasons, input_summary=summary)
     except Exception as e:
