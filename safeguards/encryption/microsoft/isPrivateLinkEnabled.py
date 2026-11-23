@@ -1,158 +1,172 @@
+# isPrivateLinkEnabled.py
+# Azure Key Vault - NS-2.1: Cloud Service Security - Azure Private Link
 """
-Transformation: isPrivateLinkEnabled
-Vendor: Microsoft Azure Key Vault  |  Category: Encryption
+isPrivateLinkEnabled
 
 Criterion: at least one private endpoint connection to the vault is approved.
 
-Data source:
-    getPrivateEndpointConnections -- GET https://management.azure.com/subscriptions/{subscriptionId}/
-    resourceGroups/{resourceGroupName}/providers/Microsoft.KeyVault/vaults/{vaultName}/
-    privateEndpointConnections?api-version=2023-07-01, a {"value": [...]} list. A Vaults - Get body
-    is also read, from properties.privateEndpointConnections.
+Data source: getPrivateEndpointConnections -- GET https://management.azure.com/subscriptions
+/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.KeyVault/vaults/{vaultName}
+/privateEndpointConnections?api-version=2023-07-01
+(https://learn.microsoft.com/en-us/rest/api/keyvault/keyvault/private-endpoint-connections/list-by-resource?view=rest-keyvault-keyvault-2023-07-01).
+Each connection's properties.privateLinkServiceConnectionState.status is the enum Pending |
+Approved | Rejected | Disconnected. The definition follows nextLink. A Vaults - Get body is also
+accepted, reading properties.privateEndpointConnections.
 
-  isPrivateLinkEnabled = true when any connection has
-  properties.privateLinkServiceConnectionState.status "Approved"; false when the listed
-  connections (possibly none) include no approved one.
+  true  = some connection's status is "Approved"
+  false = the listing ran and none is (including no connections: a proven empty set)
+  None  = a further page unread with none approved so far, no connection list, an Azure error,
+          or an exception
 
-Not evaluated (None, dataCollection status "error"): an ARM or Key Vault error envelope at the
-top level or inside a response/result/apiResponse wrapper, a body of the wrong shape, or this
-transform's own exception. An error is not a failed control, so it is never a measured False.
+Every unmeasured path returns None, and respond() derives dataCollection.status from that value,
+so an error body, an empty body or this file's own exception is Not evaluated, never a
+measured false.
 """
 import json
 import ast
-from datetime import datetime
+from datetime import datetime, timezone
 
 KEY = "isPrivateLinkEnabled"
 VENDOR = "Microsoft Azure Key Vault"
 CATEGORY = "Encryption"
+METHOD = "getPrivateEndpointConnections"
 
-WRAPPER_KEYS = ["api_response", "response", "result", "apiResponse", "Output", "rawResponse", "data"]
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        # "data" last: the {"data": ..., "validation": ...} pair is handled above, so this only
+        # catches a bare {"data": {...}} wrapper. Every one of these files unwrapped that on main
+        # and nothing has confirmed which shape Integration-Service actually sends, because these
+        # checks have never run live. Dropping it would silently turn a verdict into Not evaluated.
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output", "rawResponse",
+                        "data"]
+        for i in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
-def parse_input(input):
+def load(input):
     if isinstance(input, bytes):
         input = input.decode("utf-8")
     if isinstance(input, str):
-        text = input.strip()
-        if not text:
-            return None
-        try:
-            return json.loads(text)
-        except ValueError:
-            return ast.literal_eval(text)
-    return input
+        if not input.strip():
+            input = None
+        else:
+            try:
+                input = json.loads(input)
+            except Exception:
+                input = ast.literal_eval(input)
+    return extract_input(input)
 
 
-def error_message(body):
-    """The error an ARM or Key Vault error envelope carries, or None for any other body."""
-    if not isinstance(body, dict):
-        return None
-    error = body.get("error") or body.get("errors")
-    if isinstance(error, dict):
-        parts = [str(error.get(name)) for name in ("code", "message") if error.get(name)]
-        return (": ".join(parts) or "error")[:300]
-    if isinstance(error, str):
-        return error[:300]
-    if error:
-        return str(body.get("errorType") or body.get("message") or "error")[:300]
-    status = body.get("statusCode") or body.get("status_code") or body.get("status")
-    if isinstance(status, str) and status.strip().isdigit():
-        status = int(status.strip())
-    if isinstance(status, int) and not isinstance(status, bool) and status >= 400:
-        return ("HTTP " + str(status) + " " + str(body.get("message") or "")).strip()
-    return None
-
-
-def unwrap(data):
-    """Peel the integration's wrappers. Returns (body, error); an error at any level wins."""
-    for i in range(5):
-        message = error_message(data)
-        if message:
-            return data, message
-        if not isinstance(data, dict):
-            return data, None
-        inner = None
-        for name in WRAPPER_KEYS:
-            if isinstance(data.get(name), dict):
-                inner = data[name]
-                break
-        if inner is None:
-            return data, None
-        data = inner
-    return data, error_message(data)
-
-
-def create_response(result, pass_reasons=None, fail_reasons=None, recommendations=None,
-                    input_summary=None, api_errors=None, transformation_errors=None):
+def respond(value, reason, validation=None, extra=None, recommendations=None, transformation_errors=None):
+    """The one exit. Whether the criterion was measured is read off the value: None, and
+    only None, is not measured, and that alone sets dataCollection.status to "error", which
+    is what Token-Service reads to grade a criterion Not evaluated."""
+    result = {KEY: value}
+    for name in (extra or {}):
+        result[name] = extra[name]
+    measured = value is not None
+    passed = value is True
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
-            "validation": {"status": "unknown", "errors": [], "warnings": []},
-            "transformation": {"status": "error" if (transformation_errors or []) else "success",
-                               "errors": transformation_errors or [], "inputSummary": input_summary or {}},
-            "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [],
-                           "recommendations": recommendations or [], "additionalFindings": []},
-            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "2.0",
-                         "transformationId": KEY, "vendor": VENDOR, "category": CATEGORY},
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []),
+                           "warnings": validation.get("warnings", [])},
+            "transformation": {"status": "error" if transformation_errors else "success",
+                               "errors": transformation_errors or [], "inputSummary": extra or {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [] if passed else (recommendations or []), "additionalFindings": []},
+            "metadata": {"evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "2.0",
+                         "transformationId": KEY, "vendor": VENDOR, "category": CATEGORY, "method": METHOD},
         },
     }
 
 
-def not_measured(reason, input_summary=None):
-    return create_response(result={KEY: None}, api_errors=[reason], fail_reasons=[reason],
-                           input_summary=input_summary)
-
-
-def measured(passed, line, recommendation, input_summary=None):
-    if passed:
-        return create_response(result={KEY: True}, pass_reasons=[line], input_summary=input_summary)
-    return create_response(result={KEY: False}, fail_reasons=[line], recommendations=[recommendation],
-                           input_summary=input_summary)
-
-
-def vault_properties(data):
-    """properties of a Vaults - Get body, or None when the body is not one."""
+def error_reason(data):
+    """Why this body is not an Azure answer, or None. Azure Resource Manager and the Key Vault
+    data plane both fail with {"error": {"code": ..., "message": ...}}."""
     if not isinstance(data, dict):
-        return None
-    properties = data.get("properties")
-    return properties if isinstance(properties, dict) else None
+        return "the response is not a JSON object"
+    err = data.get("error")
+    if err:
+        if isinstance(err, dict):
+            return "Azure returned an error: " + str(err.get("code") or "") + " " + str(err.get("message") or "")[:200]
+        return "Azure returned an error: " + str(err)[:200]
+    if data.get("errors") or data.get("vendorErrorAsResponse"):
+        return "the response is an error envelope"
+    status = data.get("statusCode") or data.get("status_code")
+    if isinstance(status, int) and status >= 400:
+        return "the response carries HTTP status " + str(status)
+    return None
 
 
-def network_acls(properties):
-    acls = properties.get("networkAcls")
-    return acls if isinstance(acls, dict) else {}
+def listing(data, what):
+    """(items, None) or (None, reason). A list response is {"value": [...], "nextLink": ...};
+    only an explicit value list proves the listing ran."""
+    items = data.get("value")
+    if not isinstance(items, list):
+        return None, "no value list in the response: the " + what + " were never listed"
+    for item in items:
+        if not isinstance(item, dict):
+            return None, "an entry in the " + what + " list is not an object"
+    return items, None
+
+
+def next_link(data):
+    link = data.get("nextLink") or data.get("@odata.nextLink")
+    return link if isinstance(link, str) and link.strip() else None
+
+
+def evaluate(data, validation):
+    items = data.get("value")
+    if items is None and isinstance(data.get("properties"), dict):
+        items = data["properties"].get("privateEndpointConnections")
+        # Same vault-body test as vault_properties() elsewhere: tenantId OR vaultUri. Keying on
+        # tenantId alone made a vault with vaultUri and no tenantId Not evaluated here and
+        # measured everywhere else.
+        if items is None and (data["properties"].get("tenantId") or data["properties"].get("vaultUri")):
+            items = []
+    if not isinstance(items, list):
+        return respond(None, "no private endpoint connection list in the response: the connections were "
+                       "never listed", validation)
+    states = []
+    for item in items:
+        props = item.get("properties") if isinstance(item, dict) else None
+        state = props.get("privateLinkServiceConnectionState") if isinstance(props, dict) else None
+        status = state.get("status") if isinstance(state, dict) else None
+        states.append(str(status))
+        if status == "Approved":
+            return respond(True, "An approved private endpoint connection exists", validation,
+                           {"privateEndpointConnectionCount": len(items)})
+    extra = {"privateEndpointConnectionCount": len(items), "connectionStates": states[:20]}
+    if next_link(data):
+        return respond(None, "No approved connection on the first page, and further pages were not read",
+                       validation, extra)
+    return respond(False, str(len(items)) + " private endpoint connection(s); none is Approved", validation,
+                   extra, ["Create and approve a private endpoint for the vault"])
 
 
 def transform(input):
     try:
-        data, error = unwrap(parse_input(input))
-        if error:
-            return not_measured("The Azure API returned an error: " + error)
-        if isinstance(data, list):
-            connections = data
-        elif isinstance(data, dict) and isinstance(data.get("value"), list):
-            connections = data["value"]
-        elif vault_properties(data) is not None:
-            connections = vault_properties(data).get("privateEndpointConnections") or []
-        else:
-            return not_measured("No private endpoint connection list in the response, so the connections "
-                                "were never listed")
-        if not isinstance(connections, list):
-            return not_measured("privateEndpointConnections is not a list")
-        approved = 0
-        for conn in connections:
-            props = conn.get("properties") if isinstance(conn, dict) else None
-            state = props.get("privateLinkServiceConnectionState") if isinstance(props, dict) else None
-            if isinstance(state, dict) and state.get("status") == "Approved":
-                approved = approved + 1
-        summary = {"connectionCount": len(connections), "approvedCount": approved}
-        if approved > 0:
-            return measured(True, str(approved) + " of " + str(len(connections))
-                            + " private endpoint connection(s) approved", None, summary)
-        return measured(False, "No approved private endpoint connection among " + str(len(connections)),
-                        "Create a private endpoint for the vault and approve its connection", summary)
+        data, validation = load(input)
+        why = error_reason(data)
+        if why:
+            return respond(None, why, validation)
+        return evaluate(data, validation)
     except Exception as e:
-        return create_response(result={KEY: None}, transformation_errors=[str(e)],
-                               api_errors=["Transformation error: " + str(e)],
-                               fail_reasons=["Transformation error: " + str(e)])
+        return respond(None, "Transformation error: " + str(e)[:300], None, {"error": str(e)[:300]},
+                       transformation_errors=[str(e)[:300]])
