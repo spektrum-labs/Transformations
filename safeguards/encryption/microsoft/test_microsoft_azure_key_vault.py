@@ -292,7 +292,7 @@ def test_managed_identity_is_never_answered_from_a_vault_body(body):
     assert value is not True
     assert (value, status) == (None, "error")
     out = MODULES["isManagedIdentityUsed"].transform(body)
-    assert "role-assignment" in " ".join(out["additionalInfo"]["dataCollection"]["errors"])
+    assert "role assignment" in " ".join(out["additionalInfo"]["dataCollection"]["errors"])
 
 
 @pytest.mark.parametrize("key,make", [
@@ -310,8 +310,9 @@ def test_a_partial_listing_can_still_fail():
 
 
 @pytest.mark.parametrize("key", ["keysHaveExpirationDate", "certificatesHaveValidityPeriod"])
-def test_a_listed_empty_vault_is_compliant(key):
-    assert run(key, listing([])) == (True, "success")
+def test_a_listed_empty_vault_is_not_evaluated(key):
+    # No key or certificate to read is not evidence either way, so it is not a pass.
+    assert run(key, listing([])) == (None, "error")
 
 
 def test_private_link_reads_connections_embedded_in_the_vault_body():
@@ -320,15 +321,16 @@ def test_private_link_reads_connections_embedded_in_the_vault_body():
     assert run("isPrivateLinkEnabled", vault()) == (False, "success")
 
 
-def test_public_network_access_is_disabled_by_deny_with_no_ip_rules():
+def test_a_deny_all_firewall_is_not_public_access_disabled():
+    # Deny-all leaves the public endpoint enabled (trusted services and service endpoints still arrive over it).
     body = vault(publicNetworkAccess="Enabled")
-    assert run("isPublicNetworkAccessDisabled", body) == (True, "success")
+    assert run("isPublicNetworkAccessDisabled", body) == (False, "success")
 
 
-def test_soft_delete_defaults_on_only_for_a_real_vault_body():
+def test_soft_delete_is_not_assumed_when_the_body_does_not_say():
     body = vault()
     del body["properties"]["enableSoftDelete"]
-    assert run("isSoftDeleteEnabled", body) == (True, "success")
+    assert run("isSoftDeleteEnabled", body) == (None, "error")
 
 
 def test_every_changed_transform_reports_schema_version_2_0():
