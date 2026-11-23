@@ -254,14 +254,18 @@ def test_admins_up_to_two_break_glass_accounts_pass(admins, excluded):
     assert verdict(admins({"value": [admin_policy(excludeUsers=excluded)]}), ADMIN_KEY) == (True, "success")
 
 
-@pytest.mark.parametrize("conditions", [
-    {"locations": {"includeLocations": ["All"], "excludeLocations": ["AllTrusted"]}},
-    {"applications": {"includeApplications": ["All"], "excludeApplications": [APP]}},
-])
-def test_admins_location_and_app_exclusions_stay_findings(admins, conditions):
+def test_admins_an_app_exclusion_stays_a_finding(admins):
+    conditions = {"applications": {"includeApplications": ["All"], "excludeApplications": [APP]}}
     out = admins({"value": [admin_policy(conditions=conditions)]})
     assert verdict(out, ADMIN_KEY) == (True, "success")
     assert out["additionalInfo"]["evaluation"]["additionalFindings"]
+
+
+def test_admins_an_excluded_location_means_the_policy_does_not_count(admins):
+    conditions = {"locations": {"includeLocations": ["All"], "excludeLocations": ["AllTrusted"]}}
+    out = admins({"value": [admin_policy(conditions=conditions)]})
+    assert verdict(out, ADMIN_KEY) == (False, "success")
+    assert "exclude 1 location(s)" in " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
 
 
 def test_admins_a_proven_gap_still_fails_next_to_an_unproven_role(admins):
@@ -449,7 +453,9 @@ def membership(members):
 
 @pytest.mark.parametrize("members,expected", [
     pytest.param([U1, U2], True, id="two-members-is-break-glass"),
-    pytest.param([U1, U2, U3], None, id="three-members-is-not"),
+    # Not break-glass, and the group holds the whole workforce read whole: every member is outside every MFA policy,
+    # a measured gap (WI-3a, 16 Nov 2026; was not evaluated).
+    pytest.param([U1, U2, U3], False, id="three-members-is-not"),
 ])
 def test_36b_c_mfa_excluded_group_read_with_more_than_two_members_is_not_break_glass(mfa, members, expected):
     body = mfa_body(ca_policy("All users", excludeGroups=[G1]))

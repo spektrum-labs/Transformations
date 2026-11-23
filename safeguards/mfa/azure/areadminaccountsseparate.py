@@ -150,6 +150,11 @@ MAIL_EXCHANGE_SKU_IDS = {
 }
 
 
+def account_ref(pid):
+    """A partial object id for reasons: enough to find the account in Entra, no personal data (C4)."""
+    return "user " + str(pid)[:8] + "..."
+
+
 def as_list(value):
     if value is None:
         return []
@@ -421,7 +426,7 @@ def transform(input):
                 if user is None:
                     admins_missing_from_user_feed += 1
                     continue
-                name = str(user.get("userPrincipalName") or user.get("displayName") or principal_id)[:100]
+                name = account_ref(principal_id)  # C4: no user principal name or display name in a reason
                 if user_has_mail_or_exchange_license(user):
                     admins_with_mail_license += 1
                     admins_with_mail_license_names.append(name)
