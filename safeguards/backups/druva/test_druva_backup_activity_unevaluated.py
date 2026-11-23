@@ -18,6 +18,7 @@ import copy
 import importlib.util
 import json
 import pathlib
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -232,6 +233,11 @@ def at(n, hour, status, **extra):
     row.update({"jobID": 800000 + n, "started": "2026-01-10T%02d:00:00.000Z" % hour, "scheduled": "NA"})
     row.update(extra)
     return {k: v for k, v in row.items() if v is not MISSING}
+
+
+def ago(hours):
+    """A started stamp this many hours before now (the retry cutoff is measured against the clock)."""
+    return (datetime.utcnow() - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
 def both(rows, mode):
@@ -509,7 +515,7 @@ def test_paused_states_score_as_not_passing(status, mode):
 @pytest.mark.parametrize("earlier", ["Successful", "Failed"])
 def test_waiting_for_retry_is_neither_pass_nor_fail(earlier, mode):
     # a set whose latest job is Waiting for retry leaves both sides; the older job does not decide it either way
-    rows = [at(1, 3, earlier), at(2, 9, "Waiting for retry"), job(5), job(6, status="Failed")]
+    rows = [at(1, 3, earlier, started=ago(5)), at(2, 9, "Waiting for retry", started=ago(2)), job(5), job(6, status="Failed")]
     assert both_orders(rows, mode) == (50.0, 1)
     counts = run("failedBackupJobsCount", rows, mode)[1]["transformedResponse"]
     assert (counts["backupSetsRetrying"], counts["backupSetsEvaluated"], counts["backupJobsSuperseded"]) == (1, 2, 1)
@@ -517,10 +523,58 @@ def test_waiting_for_retry_is_neither_pass_nor_fail(earlier, mode):
     assert "1 sets waiting for retry excluded" in reason
 
 
+def stale_mix(first, retry_started, **retry_extra):
+    # one retrying set, one passing set, one failing set
+    return [at(1, 3, "Failed", started=first), at(2, 9, "Waiting for retry", started=retry_started, **retry_extra), job(5), job(6, status="Failed")]
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_retrying_set_older_than_the_cutoff_counts_as_failed(mode):
+    rows = stale_mix(ago(30), ago(26))
+    assert both_orders(rows, mode) == (round(100.0 / 3, 2), 2)
+    counts = run("failedBackupJobsCount", rows, mode)[1]["transformedResponse"]
+    assert (counts["backupSetsRetrying"], counts["backupSetsRetryingStale"], counts["backupSetsEvaluated"]) == (1, 1, 3)
+    assert counts["nonSuccessfulStatuses"] == {"Waiting for retry": 1, "Failed": 1}
+    ev = run("failedBackupJobsCount", rows, mode)[1]["additionalInfo"]["evaluation"]
+    reason = (ev["passReasons"] + ev["failReasons"])[0]
+    assert "0 sets waiting for retry excluded" in reason and "1 sets waiting for retry for over 24 hours counted as failed" in reason
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_retrying_set_ages_from_its_first_failed_attempt_not_the_latest_retry(mode):
+    # the newest retry row is young, but the set has been failing for 30h
+    assert both_orders(stale_mix(ago(30), ago(1)), mode) == (round(100.0 / 3, 2), 2)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_retrying_set_younger_than_the_cutoff_is_neither(mode):
+    assert both_orders(stale_mix(ago(20), ago(1)), mode) == (50.0, 1)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_an_older_success_does_not_age_a_fresh_retry(mode):
+    rows = [at(1, 3, "Successful", started=ago(60)), at(2, 9, "Waiting for retry", started=ago(1)), job(5)]
+    assert both_orders(rows, mode) == (100.0, 0)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_retrying_set_with_no_usable_timestamp_stays_uncounted(mode):
+    rows = [at(1, 9, "Waiting for retry", started="NA", lastUpdatedTime="NA"), job(5), job(6, status="Failed")]
+    assert both_orders(rows, mode) == (50.0, 1)
+    out = run("backupSuccessRatePercentage", rows, mode)[1]
+    ev = out["additionalInfo"]["evaluation"]
+    assert "1 with no usable timestamp" in (ev["passReasons"] + ev["failReasons"])[0]
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_only_stale_retrying_sets_are_evaluated_as_failed(mode):
+    assert both_orders([at(1, 3, "Waiting for retry", started=ago(40))], mode) == (0.0, 1)
+
+
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("key", ["backupSuccessRatePercentage", "failedBackupJobsCount"])
 def test_only_retrying_sets_is_unevaluated(key, mode):
-    out = assert_unevaluated(key, [at(1, 3, "Failed"), at(2, 9, "Waiting for retry"), job(5, status="Queued")], mode)
+    out = assert_unevaluated(key, [at(1, 3, "Failed", started=ago(5)), at(2, 9, "Waiting for retry", started=ago(2)), job(5, status="Queued")], mode)
     assert "waiting for retry" in out["additionalInfo"]["dataCollection"]["errors"][0]
 
 
