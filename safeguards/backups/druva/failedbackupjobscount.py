@@ -2,7 +2,7 @@
 Transformation: failedBackupJobsCount
 Vendor: Druva (Data Security Cloud, Enterprise Workloads)  |  Category: Backups
 Method: getBackupActivity -> POST /platform/reporting/v1/reports/ewBackupActivity
-Evaluates: Count of Druva backup sets whose latest finished job in the Backup Activity report is not Successful or Successful with errors (Failed, Completed with errors, Skipped, Window expired, a missing status...). The read window is the one the integration definition sets (7 days today: lastUpdatedTime GTE utcNow-7d). Queued/Running jobs are excluded, and a set whose latest job is Waiting for retry is left out (neither pass nor fail); a failure a later run on the same set fixed does not count.
+Evaluates: Count of Druva backup sets whose latest finished job in the Backup Activity report is not Successful or Successful with errors (Failed, Completed with errors, Skipped, Window expired, a missing status...). The read window is the one the integration definition sets (7 days today: lastUpdatedTime GTE utcNow-7d). Queued/Running jobs are excluded, and a set whose latest job is Waiting for retry is left out (neither pass nor fail) until it has been non-passing for over 24 hours, then it counts as failed; a failure a later run on the same set fixed does not count.
 Unevaluated (None, dataCollection.status "error"): zero jobs in the window, only in-flight jobs, a partial read, a missing, error or unrecognised body, failed input validation, or a transformation error.
 """
 import json
@@ -196,6 +196,8 @@ IN_FLIGHT = ("queued", "running", "in progress", "scheduled", "pending", "starti
 # "Successful with errors" passes: the job finished and protected the set; Druva uses it when only some files were skipped.
 PASSING = ("successful", "successful with errors")
 TIME_FIELDS = ("started", "scheduled", "lastUpdatedTime")
+# A set still Waiting for retry this long after its first non-passing attempt is counted as failed (one backup window).
+RETRY_CUTOFF_HOURS = 24
 
 
 def status_of(row):
@@ -211,6 +213,25 @@ def is_retrying(row):
     """Waiting for retry: Druva will rerun a failed attempt. When it is a set's latest job the set is neither a failure
     nor a pass, so it is left out of both sides; an older success must not decide it either."""
     return status_of(row).startswith("waiting for retry")
+
+
+def stuck_since(finished, row):
+    """When a retrying set first stopped passing: the earliest started/scheduled/lastUpdatedTime among its non-passing
+    finished rows newer than its newest passing one. None when no row has a usable time (the set stays uncounted)."""
+    key = None
+    for i, r in enumerate(finished):
+        if r is row:
+            key = set_key(r, i)
+    times = []
+    for i, r in enumerate(finished):
+        if set_key(r, i) == key:
+            when = None
+            for f in TIME_FIELDS:
+                when = when or parse_time(r.get(f))
+            times.append((when, status_of(r) in PASSING))
+    last_pass = max([w for w, ok in times if ok and w] or [datetime.min])
+    since = [w for w, ok in times if not ok and w and w > last_pass]
+    return min(since) if since else None
 
 
 def set_key(row, index):
@@ -311,9 +332,14 @@ def evaluate(jobs, partial, meta, reported):
     finished = [r for r in jobs if not is_in_flight(r)]
     newest = latest_per_set(finished)
     retrying = [r for r in newest if is_retrying(r)]
-    latest = [r for r in newest if not is_retrying(r)]
+    now = datetime.utcnow()
+    since = [stuck_since(finished, r) for r in retrying]
+    stale = [r for r, t in zip(retrying, since) if t is not None and now - t > timedelta(hours=RETRY_CUTOFF_HOURS)]
+    untimed = [t for t in since if t is None]
+    latest = [r for r in newest if not is_retrying(r)] + stale
     summary = {"backupJobsReported": reported, "backupRowsIgnored": reported - len(jobs), "backupJobsInFlight": len(in_flight),
                "backupJobsSuperseded": len(finished) - len(newest), "backupSetsRetrying": len(retrying),
+               "backupSetsRetryingStale": len(stale),
                "backupSetsEvaluated": len(latest)}
     if meta.get("windowStart"):
         summary["windowStart"] = meta["windowStart"]
@@ -322,9 +348,11 @@ def evaluate(jobs, partial, meta, reported):
         return None, summary, ["The Druva Backup Activity read is partial (more pages were not read), so it cannot answer this; nothing was concluded"]
     if len(latest) == 0:
         return None, summary, ["No Druva backup set has a finished result: " + str(len(in_flight)) + " jobs in flight, "
-                               + str(len(retrying)) + " sets waiting for retry"]
-    tail = ("; " + str(len(in_flight)) + " in-flight jobs excluded, " + str(len(retrying)) + " sets waiting for retry excluded, "
-            + str(len(finished) - len(newest))
+                               + str(len(retrying) - len(stale)) + " sets waiting for retry"]
+    retry_note = (" (" + str(len(untimed)) + " with no usable timestamp), " + str(len(stale)) + " sets waiting for retry for over "
+                  + str(RETRY_CUTOFF_HOURS) + " hours counted as failed") if retrying else ""
+    tail = ("; " + str(len(in_flight)) + " in-flight jobs excluded, " + str(len(retrying) - len(stale)) + " sets waiting for retry excluded"
+            + retry_note + ", " + str(len(finished) - len(newest))
             + " earlier jobs superseded by a later run" + (" (read since " + meta["windowStart"] + ")" if meta.get("windowStart") else ""))
     bad = [r for r in latest if status_of(r) not in PASSING]
     statuses = {}
