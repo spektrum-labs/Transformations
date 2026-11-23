@@ -41,17 +41,13 @@ FILES = [
     "86ded564-522a-4c9b-9106-365e4cbdec7d/islifecyclemanagementenabled.py",
     "874a78ff-2ca3-4c0e-ab86-19277536ac87/confirmedlicensepurchased.py",
     "BBC425FA-0638-4BF1-8194-19E7E4F2F43C/confirmedlicensepurchased.py",
-    "BBC425FA-0638-4BF1-8194-19E7E4F2F43C/isbehavioralmonitoringvalid.py",
-    "BBC425FA-0638-4BF1-8194-19E7E4F2F43C/isidpenabled.py",
-    "BBC425FA-0638-4BF1-8194-19E7E4F2F43C/ispatchmanagementenabled.py",
-    "BBC425FA-0638-4BF1-8194-19E7E4F2F43C/isremovablemediacontrolled.py",
+    # Out per #1076 (reads no self-named key): BBC425FA four checks, NinjaOne SSO, Avanan logging.
     "a6b871e6-de13-41fa-8636-81a3b6f315f4/asm_transform.py",
     "a6b871e6-de13-41fa-8636-81a3b6f315f4/confirmedlicensepurchased.py",
     "backups/azure/confirmedlicensepurchased.py",
     "backups/datto/issamlenforced.py",
     "cac4b80f-a930-415e-b1e3-de285fe78452/confirmedlicensepurchased.py",
     "cac4b80f-a930-415e-b1e3-de285fe78452/isbehavioralmonitoringvalid.py",
-    "cac4b80f-a930-415e-b1e3-de285fe78452/isidpenabled.py",
     "cac4b80f-a930-415e-b1e3-de285fe78452/ispatchmanagementenabled.py",
     "cac4b80f-a930-415e-b1e3-de285fe78452/isremovablemediacontrolled.py",
     "d9b6f27a-2e67-4b55-a09e-0784c5de9abd/confirmedlicensepurchased.py",
@@ -59,7 +55,6 @@ FILES = [
     "d9b6f27a-2e67-4b55-a09e-0784c5de9abd/isauditloggingenabled.py",
     "d9b6f27a-2e67-4b55-a09e-0784c5de9abd/islifecyclemanagementenabled.py",
     "emailsecurity/avanan/confirmedlicensepurchased.py",
-    "emailsecurity/avanan/isemailsecurityloggingenabled.py",
     "epp/addigy/confirmedlicensepurchased.py",
     "epp/liongard/confirmedlicensepurchased.py",
     "iam/beyondtrust-pra/confirmedlicensepurchased.py",
@@ -268,13 +263,6 @@ def test_asm_explicit_flag_without_lists_stays_measured(value):
     assert dc_status(out) == "success", out
     reasons = out["additionalInfo"]["evaluation"]["passReasons" if value else "failReasons"]
     assert any("Attack Surface Management" in r for r in reasons), out
-
-
-def test_avanan_logging_explicit_off_is_a_measured_fail():
-    out, criteria = run("emailsecurity/avanan/isemailsecurityloggingenabled.py",
-                        {"isEmailSecurityLoggingEnabled": False})
-    assert criteria["isEmailSecurityLoggingEnabled"] is False, out
-    assert dc_status(out) == "success", out
 
 
 @pytest.mark.parametrize("rel,value", SIBLING_CASES)

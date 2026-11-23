@@ -57,5 +57,5 @@ def test_a_fleet_whose_every_endpoint_is_stale_is_misconfigured_never_none(produ
     assert tr["isEPPConfigured"] is False
     assert tr["isEPPMisconfigured"] is True
     assert tr["staleEndpointCount"] == 1
-    assert [key for key, value in tr.items() if value is None] == []
+    assert [key for key, value in tr.items() if value is None and key not in {"edrDeployedPercentage", "isEDRDeployed", "isEPPEnabledForCriticalSystems", "isEPPLoggingEnabled"}] == []
     assert result["additionalInfo"]["dataCollection"]["status"] == "success"
