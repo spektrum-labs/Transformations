@@ -3,7 +3,7 @@ Transformation: isTransportRuleBannerEnabled (Microsoft One-Click)
 Vendor: Microsoft
 Category: Email Security / Transport Rules
 
-Evaluates if transport rule banner is enabled by checking for rules with Disclaimer or SubjectPrefix actions,
+Evaluates if transport rule banner is enabled by checking for rules with Disclaimer, SubjectPrefix or external PrependSubject actions,
 and reports the Exchange-access prerequisite precisely for the Microsoft One-Click flow.
 """
 
@@ -164,20 +164,31 @@ def transform(input):
         # Only a list that was actually read (an empty one included) is evidence. A missing or non-list
         # transportRules proved nothing, so it is Not evaluated, never the stated-negative False.
         transport_rules = data.get("transportRules") if isinstance(data, dict) else None
-        if not isinstance(transport_rules, list):
+        if isinstance(transport_rules, dict) and transport_rules:
+            transport_rules = [transport_rules]  # single rule serializes as an object
+        if not isinstance(transport_rules, list) or (transport_rules and not any(isinstance(x, dict) for x in transport_rules)):
+            # An error object from the collector (IS vendorStatus >= 400) is not evidence: say why, not just "missing".
+            status = data.get("vendorStatus") if isinstance(data, dict) else None
+            api_error, recommendation = "Could not read transport rules", "Re-evaluate this check once the Exchange Online read succeeds"
+            if isinstance(status, int) and not isinstance(status, bool) and status >= 400:
+                # vendorStatus is the HTTP status of Spektrum's own Exchange collector, not Microsoft: never blame Microsoft.
+                recommendation = "Re-evaluate this check later; if it keeps failing, contact Spektrum support"
+                api_error = "Could not read Exchange Online data: the Spektrum Exchange collector " + ("is unavailable (HTTP 5xx)" if status >= 500 else "returned HTTP %d" % status)
             return create_response(
                 result={criteriaKey: None},
                 validation=validation,
-                api_errors=["Could not read transport rules"],
+                api_errors=[api_error],
                 fail_reasons=["Transport rules were not returned, so this check could not be evaluated"],
-                recommendations=["Re-evaluate this check once the Exchange Online read succeeds"]
+                recommendations=[recommendation]
             )
+        transport_rules = [x for x in transport_rules if isinstance(x, dict)]  # skip unreadable entries
         banner_rules = []
 
         for rule in transport_rules:
             actions = rule.get('Actions', [])
             if actions:
-                matching_actions = [action for action in actions if ('Disclaimer' in action or 'SubjectPrefix' in action)]
+                # A subject prefix is a banner only on mail from outside the organization; [SPAM]-style tags are not.
+                matching_actions = [action for action in actions if ('Disclaimer' in action or 'SubjectPrefix' in action or ('PrependSubject' in action and rule.get('FromScope') == 'NotInOrganization'))]
                 if matching_actions:
                     banner_rules.append({
                         'Name': rule.get('Name', 'Unknown'),
@@ -196,7 +207,7 @@ def transform(input):
             if len(banner_rules) > 0:
                 fail_reasons.append(f"Found {len(banner_rules)} banner rules but none are enabled")
             else:
-                fail_reasons.append("No transport rules with Disclaimer or SubjectPrefix actions found")
+                fail_reasons.append("No transport rules with Disclaimer, SubjectPrefix or external PrependSubject actions found")
             recommendations.append("Enable transport rules with banner/disclaimer actions for external email warnings")
 
         return create_response(

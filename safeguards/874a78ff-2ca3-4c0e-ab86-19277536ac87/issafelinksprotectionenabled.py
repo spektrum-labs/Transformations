@@ -98,6 +98,37 @@ def parse_api_error(raw_error: str, source: str = None) -> tuple:
         return (f"Could not connect to {src}: {clean}",
                 f"Check {src} credentials and configuration")
 
+def secure_score_unreadable(data):
+    """Why a Secure Score body holds no evidence, or None when its latest score carries controlScores.
+
+    The reason names an HTTP status or Graph error code only, never message text (it can echo tenant
+    details). A PSError body is left to the PSError branch, which already reports it as a collection error.
+    """
+    if not isinstance(data, dict):
+        return "Microsoft Secure Score returned no data"
+    if "PSError" in data:
+        return None
+    status = data.get("statusCode")
+    if status is None:
+        status = data.get("status_code")
+    has_status = isinstance(status, int) and not isinstance(status, bool)
+    if data.get("error") or (has_status and status >= 400):
+        if has_status:
+            return "Microsoft Secure Score could not be read (HTTP " + str(status) + ")"
+        err = data.get("error")
+        code = err.get("code") if isinstance(err, dict) else None
+        if isinstance(code, str) and code:
+            return "Microsoft Secure Score could not be read (" + code[:60] + ")"
+        return "Microsoft Secure Score could not be read"
+    values = data.get("value")
+    if not isinstance(values, list) or len(values) == 0 or not isinstance(values[0], dict):
+        return "Microsoft Secure Score data not available"
+    control_scores = values[0].get("controlScores")
+    if not isinstance(control_scores, list) or len(control_scores) == 0:
+        return "Microsoft Secure Score has no controlScores"
+    return None
+
+
 def transform(input):
     criteriaKey = "isSafeLinksProtectionEnabled"
     controlName = "mdo_safelinksforemail"
@@ -109,6 +140,17 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
 
         data, validation = extract_input(input)
+
+        # No controlScores to read (failed call, empty body, no score yet): unknown, never a measured fail.
+        unreadable = secure_score_unreadable(data)
+        if unreadable:
+            return create_response(
+                result={criteriaKey: None},
+                validation={"status": "skipped", "errors": [], "warnings": [unreadable]},
+                api_errors=[unreadable],
+                fail_reasons=[unreadable],
+                recommendations=["Verify the Microsoft Graph integration can read Secure Score (SecurityEvents.Read.All)"]
+            )
 
         if validation.get("status") == "failed":
             return create_response(
@@ -174,8 +216,9 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            transformation_errors=["Secure Score transformation error"],
+            api_errors=["Secure Score transformation error"],
+            fail_reasons=["Transformation error"]
         )
