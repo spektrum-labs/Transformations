@@ -1,0 +1,101 @@
+import importlib.util
+import unittest
+from pathlib import Path
+
+PATH = Path(__file__).with_name("istransportrulebannerenforced.py")
+KEY = "isTransportRuleBannerEnforced"
+
+# Error objects from the Exchange Lambda path (synthetic). None is evidence about the control.
+COLLECTOR_ERRORS = {
+    "integration_service_502": {"result": {"apiResponse": {
+        "integrationName": "Example", "errorMessage": "An error occurred while processing your request.",
+        "vendorStatus": 502, "vendorErrorType": "vendor_error",
+        "vendorError": '{"Type": "User", "message": "example"}'}}},
+    "lambda_service_body": {"Type": "User", "message": "example"},
+    "handler_error": {"error": "Internal error"},
+    "script_crashed": {"Success": False, "Output": "", "Error": "example stderr"},
+    "script_reported_failure": {"Success": True, "Output": {"success": False, "organizationDomain": None}},
+}
+
+
+def load():
+    spec = importlib.util.spec_from_file_location("istransportrulebannerenforced", PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def rule(mode="Enforce", state="Enabled"):
+    return {"Name": "Example banner", "State": state, "Mode": mode, "Actions": ["PrependSubject Disclaimer example"]}
+
+
+class TransportRuleBannerEnforcedTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.t = load()
+
+    def test_collector_error_objects_are_not_evaluated(self):
+        for name, payload in COLLECTOR_ERRORS.items():
+            with self.subTest(name=name):
+                r = self.t.transform(payload)
+                self.assertIsNone(r["transformedResponse"][KEY])
+                self.assertEqual(r["additionalInfo"]["dataCollection"]["status"], "error")
+                self.assertTrue(r["additionalInfo"]["dataCollection"]["errors"])
+                self.assertTrue(r["additionalInfo"]["evaluation"]["recommendations"])
+                self.assertNotIn("example", str(r["additionalInfo"]))
+
+    def test_failed_validation_is_not_evaluated(self):
+        r = self.t.transform({"data": {"vendorStatus": 502}, "validation": {"status": "failed", "errors": ["x"], "warnings": []}})
+        self.assertIsNone(r["transformedResponse"][KEY])
+        self.assertEqual(r["additionalInfo"]["dataCollection"]["status"], "error")
+
+    def test_missing_or_non_list_is_not_evaluated(self):
+        for payload in ({"Output": {}}, {"Output": {"transportRules": None}}, {"Output": {"transportRules": "x"}}):
+            with self.subTest(payload=payload):
+                self.assertIsNone(self.t.transform(payload)["transformedResponse"][KEY])
+
+    def test_exchange_online_action_type_names(self):
+        """Get-TransportRule serializes Actions as .NET type names; a subject prefix counts only on external mail."""
+        tasks = "Microsoft.Exchange.MessagingPolicies.Rules.Tasks."
+        cases = (
+            ("PrependSubjectAction", "NotInOrganization", True),
+            ("PrependSubjectAction", None, False),
+            ("ApplyHtmlDisclaimerAction", None, True),
+            ("SetHeaderAction", "NotInOrganization", False),
+        )
+        for action, scope, expected in cases:
+            with self.subTest(action=action, scope=scope):
+                r = {"Name": "Example banner", "State": "Enabled", "Mode": "Enforce", "FromScope": scope,
+                     "Actions": [tasks + action]}
+                self.assertIs(self.t.transform({"Output": {"transportRules": [r]}})["transformedResponse"][KEY], expected)
+
+    def test_real_shape_passes(self):
+        r = self.t.transform({"Output": {"transportRules": [rule()]}})
+        self.assertIs(r["transformedResponse"][KEY], True)
+        self.assertEqual(r["additionalInfo"]["dataCollection"]["status"], "success")
+
+    def test_empty_list_is_a_stated_negative(self):
+        r = self.t.transform({"Output": {"transportRules": []}})
+        self.assertIs(r["transformedResponse"][KEY], False)
+        self.assertEqual(r["additionalInfo"]["dataCollection"]["status"], "success")
+
+    def test_negative_shape_fails(self):
+        r = self.t.transform({"Output": {"transportRules": [rule(mode='TestWithNotifications')]}})
+        self.assertIs(r["transformedResponse"][KEY], False)
+        self.assertEqual(r["additionalInfo"]["dataCollection"]["status"], "success")
+
+    def test_single_rule_object_is_graded(self):
+        r = self.t.transform({"Output": {"transportRules": rule()}})
+        self.assertIs(r["transformedResponse"][KEY], True)
+
+    def test_non_dict_rules_are_skipped(self):
+        r = self.t.transform({"Output": {"transportRules": ["example", rule()]}})
+        self.assertIs(r["transformedResponse"][KEY], True)
+        for rules in (["example"], [None]):
+            r = self.t.transform({"Output": {"transportRules": rules}})
+            self.assertIsNone(r["transformedResponse"][KEY])
+            self.assertEqual(r["additionalInfo"]["dataCollection"]["status"], "error")
+
+
+if __name__ == "__main__":
+    unittest.main()

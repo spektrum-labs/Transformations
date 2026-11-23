@@ -1,0 +1,39 @@
+{
+  "name": "isBackupInventoryComplete",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when the backup inventory read every enabled region with every read action allowed, nothing cut short and nothing timed out.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the regions and read actions the backup inventory uses",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "An inventory whose scope lists no refused action, unreachable region, truncation, timeout or error.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Backup"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/4BC425FA-0638-4BF1-8194-19E7E4F2F43C/isbackupinventorycomplete.py",
+    "safeguards/4BC425FA-0638-4BF1-8194-19E7E4F2F43C/test_backup_inventory_transforms.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-18",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real account body replayed yet, so V0)."
+    }
+  ]
+}

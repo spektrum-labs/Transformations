@@ -213,7 +213,7 @@ Three casing rules, and they are not the same rule:
 
 - **Filename = the criteria key, lowercased**: `isMFAEnforcedForUsers` → `ismfaenforcedforusers.py` (`main:CONTRIBUTING.md:60`). This is because Integration-Service mints the default fetch URL as `str(key).lower() + ".py"` (IS `integrator.py:2601` via [02](02-execution-contract.md)) and raw GitHub paths are case-sensitive (live-verified: exact-case 200, lowercased 404).
 - **Keys inside `transformedResponse` = camelCase, exact**: `isMFAEnforcedForUsers`, `scoreInPercentage`, `totalUsers` (`main:CONTRIBUTING.md`, "Criteria Key Conventions"). `compare_values` extracts `transformedResponse[criteriaKey]` by exact string match.
-- **Directory = `{category}/{vendor}`, all lowercase** — see [04 — the catalog](04-catalog.md) for reachability and the twin-tree traps.
+- **Directory = `{category}/{vendor}`, all lowercase** — see [04 — the catalog](04-catalog.md) for reachability and the paired-tree traps.
 
 > [!WARNING]
 > **A mixed-case filename is unreachable via the minted default URL.** Main already carries 59 camelCase transform filenames (all 16 of `encryption/microsoft/`, `epp/ninjaone-endpoint-management/isBitLockerRecoveryKeyEscrowed.py`, ...) — including both files of the NinjaOne hotfix (PR #544), **all 7 transforms of the Lookout hotfix** (PR #548), and all 5 of the GitHub DevSecOps set (PR #556, 2026-09-14) — that only work if the integration definition carries an explicit exact-case `transformationLogic` URL, and 404 silently (`isEvaluated: False`) otherwise. Snake_case is just as dead: lowercasing a camelCase key never produces underscores, so `is_backup_encrypted.py` can never be minted. On develop, 113 of the 135 develop-only transform modules are mixed-case. Name your file lowercase, no underscores, and never "normalize" an existing file's case — whichever URL variant currently works is a production dependency ([02](02-execution-contract.md), case-sensitivity gotcha).
@@ -225,7 +225,7 @@ Three casing rules, and they are not the same rule:
 
 The numbered flow, then the same loop as a diagram. Assume the criteria key is `isMFAEnforcedForUsers` for vendor Acme in category `mfa`.
 
-1. **Pick the directory**: `safeguards/mfa/acme/` — lowercase category, lowercase vendor. First check [04 — the catalog](04-catalog.md) for an existing dir (and for twins: `iam/` vs `identity-and-access-management/`, UUID dir vs category dir — adding to the twin production doesn't fetch is a silent no-op).
+1. **Pick the directory**: `safeguards/mfa/acme/` — lowercase category, lowercase vendor. First check [04 — the catalog](04-catalog.md) for an existing dir (and for paired directories: `iam/` vs `identity-and-access-management/`, UUID dir vs category dir — adding a file to the directory of the pair that production doesn't fetch is a silent no-op).
 2. **Name the file** `ismfaenforcedforusers.py` — the criteria key, lowercased, no underscores.
 3. **Start from a modern envelope file**: copy the structure of `main:safeguards/compliancemanagement/knowbe4/phishingclickrate.py` (standard helpers) and the logic discipline of `main:safeguards/cloudsecurity/awssecurityhub/isguarddutyenabled.py`. Strip phishingclickrate's `strptime` date parsing. Never start from a legacy bare-dict file.
 4. **Inline the helpers**: `extract_input` (the dominant variant, verbatim) and `create_response`, editing only the embedded `transformationId`/`vendor`/`category` metadata. Add a module-level `CRITERIA_KEY = "isMFAEnforcedForUsers"` constant and use it everywhere the key appears.

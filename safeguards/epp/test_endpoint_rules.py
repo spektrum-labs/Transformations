@@ -50,11 +50,7 @@ class TestSophosActiveWindow:
         body = {"items": [sophos_computer(30), sophos_computer(31)]}
         result = out(SOPHOS_EPP, body)
         assert result["staleEndpointCount"] == 2
-        # Not 0%. A fleet whose newest check-in predates the active window leaves every coverage
-        # denominator empty, and percentage(0, 0) is 0, which graded as a measured failure of an
-        # estate nobody saw. The whole read is now Unevaluated and only the stale count survives
-        # (PR #1067 review, 2026-10-07).
-        assert result["requiredCoveragePercentage"] is None
+        assert result["requiredCoveragePercentage"] == 0
 
     def test_stale_sensor_count_sees_a_dark_fleet(self):
         body = {"items": [sophos_computer(30), sophos_computer(31)]}
@@ -110,16 +106,18 @@ def device(device_id, node_class, policy, days_ago):
 
 
 class TestNinjaOneDeviceRules:
-    def test_phones_and_stale_devices_leave_the_policy_percentage(self):
-        body = {"data": [device(1, "MAC", "37", 1), device(2, "MAC", [], 20), device(3, "APPLE_IOS", [], 1)]}
-        result = out(NINJA / "isEPPConfigured.py", body)
+    def test_phones_and_stale_devices_leave_the_protection_percentage(self):
+        devices = [device(1, "MAC", "37", 1), device(2, "MAC", [], 20), device(3, "APPLE_IOS", [], 1)]
+        rows = [av_row(1, "Defender", "ON", 1), av_row(2, "Defender", "OFF", 20), av_row(3, "Defender", "OFF", 1)]
+        result = out(NINJA / "isEPPConfigured.py", {"results": rows, "devices": devices})
         assert result["isEPPConfigured"] == 100
         assert result["devicesLeftOutMobile"] == 1
         assert result["devicesLeftOutStale"] == 1
 
-    def test_dark_fleet_policy_percentage_is_not_evaluated(self):
-        body = {"data": [device(1, "MAC", "37", 30), device(2, "MAC", "37", 31)]}
-        result = out(NINJA / "isEPPConfigured.py", body)
+    def test_dark_fleet_protection_percentage_is_not_evaluated(self):
+        rows = [av_row(1, "Defender", "ON", 30), av_row(2, "Defender", "ON", 31)]
+        devices = [device(1, "WINDOWS_WORKSTATION", [], 30), device(2, "WINDOWS_WORKSTATION", [], 31)]
+        result = out(NINJA / "isEPPConfigured.py", {"results": rows, "devices": devices})
         assert result["isEPPConfigured"] is None
         assert result["fleetDark"] is True
 

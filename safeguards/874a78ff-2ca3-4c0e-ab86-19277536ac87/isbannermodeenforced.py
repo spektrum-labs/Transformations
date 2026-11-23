@@ -3,7 +3,7 @@ Transformation: isBannerModeEnforced
 Vendor: Microsoft
 Category: Email Security / Transport Rules
 
-Evaluates if banner mode is enforced by checking transport rules for Disclaimer or SubjectPrefix actions.
+Evaluates if banner mode is enforced by checking transport rules for Disclaimer, SubjectPrefix or external PrependSubject actions.
 """
 
 import json
@@ -111,9 +111,11 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
-                fail_reasons=["Input validation failed"]
+                api_errors=["Could not read the response: input validation failed"],
+                fail_reasons=["Input validation failed"],
+                recommendations=["Re-evaluate this check once the Exchange Online read succeeds"]
             )
 
 
@@ -133,14 +135,27 @@ def transform(input):
         recommendations = []
         is_enforced = False
 
-        transport_rules = data.get("transportRules", [])
+        transport_rules = data.get("transportRules") if isinstance(data, dict) else None
+        if isinstance(transport_rules, dict) and transport_rules:
+            transport_rules = [transport_rules]  # single rule serializes as an object
+        if not isinstance(transport_rules, list) or (transport_rules and not any(isinstance(x, dict) for x in transport_rules)):
+            # Missing or non-list: an error body or a failed read, not evidence of a missing control.
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["Could not read transport rules"],
+                fail_reasons=["Transport rules were not returned, so this check could not be evaluated"],
+                recommendations=["Re-evaluate this check once the Exchange Online read succeeds"]
+            )
+        transport_rules = [x for x in transport_rules if isinstance(x, dict)]  # skip unreadable entries
         banner_rules = []
 
         for rule in transport_rules:
             if rule.get('State') == 'Enabled':
                 actions = rule.get('Actions', [])
                 if actions:
-                    matching_actions = [action for action in actions if ('Disclaimer' in action or 'SubjectPrefix' in action)]
+                    # A subject prefix is a banner only on mail from outside the organization; [SPAM]-style tags are not.
+                    matching_actions = [action for action in actions if ('Disclaimer' in action or 'SubjectPrefix' in action or ('PrependSubject' in action and rule.get('FromScope') == 'NotInOrganization'))]
                     if matching_actions:
                         banner_rules.append({
                             'Name': rule.get('Name', 'Unknown'),
@@ -159,7 +174,7 @@ def transform(input):
             if len(banner_rules) > 0:
                 fail_reasons.append(f"Found {len(banner_rules)} banner rules but none are in Enforce mode")
             else:
-                fail_reasons.append("No transport rules with Disclaimer or SubjectPrefix actions found")
+                fail_reasons.append("No transport rules with Disclaimer, SubjectPrefix or external PrependSubject actions found")
             recommendations.append("Configure transport rules with banner/disclaimer actions in Enforce mode")
 
         return create_response(

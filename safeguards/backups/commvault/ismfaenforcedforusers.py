@@ -10,6 +10,27 @@
 import json
 
 
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status follows the value: None is not measured."""
+    result = {key: value}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Commvault", "category": "Backups", "schemaVersion": "1.0"},
+        },
+    }
+
+
 def transform(input):
     """
     isMFAEnforcedForUsers = true when CommCell two-factor authentication mode is 1 (every user). Mode 2
@@ -75,16 +96,16 @@ def transform(input):
         data = unwrap(parse_input(input), "twoFactorAuthenticationInfo")
         problem = vendor_error(data)
         if problem:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         info = data.get("twoFactorAuthenticationInfo")
         if not isinstance(info, dict) or "mode" not in info:
-            return {key: False, "reason": "Response has no twoFactorAuthenticationInfo.mode"}
+            return respond(key, None, "Response has no twoFactorAuthenticationInfo.mode")
         mode = as_int(info.get("mode"))
         if mode == 1:
-            return {key: True, "reason": "Two-factor authentication is enforced for all users"}
+            return respond(key, True, "Two-factor authentication is enforced for all users")
         if mode == 2:
             groups = [str(g.get("userGroupName")) for g in (info.get("userGroups") or []) if isinstance(g, dict)]
-            return {key: False, "reason": "Two-factor authentication applies only to selected user groups", "userGroups": groups[:25]}
-        return {key: False, "reason": "Two-factor authentication is off (mode " + str(info.get("mode")) + ")"}
+            return respond(key, False, "Two-factor authentication applies only to selected user groups", {"userGroups": groups[:25]})
+        return respond(key, False, "Two-factor authentication is off (mode " + str(info.get("mode")) + ")")
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "The transform raised: " + str(e), {"error": str(e)})

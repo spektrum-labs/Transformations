@@ -3,13 +3,14 @@ Transformation: isBackupEnabled
 Vendor: Druva (Data Security Cloud, Enterprise Workloads)  |  Category: Backups
 Method: getResourceStatus -> POST /platform/reporting/v1/reports/ewResourceStatus
 Evaluates: True when the Druva Resource Status report lists at least one resource whose backup set has backupEnabled = Yes.
-Fails closed: a missing, error or unrecognised body returns False.
+Not measured: a missing, error or unrecognised body, an empty report, failed validation or a
+transformation error returns None with dataCollection.status "error" (Unevaluated, never graded).
 """
 import json
 from datetime import datetime
 
 CRITERIA_KEY = "isBackupEnabled"
-FAIL_VALUE = False
+FAIL_VALUE = None
 RECOMMENDATION = "Enable backup on at least one Druva backup set (Enterprise Workloads)."
 
 
@@ -72,10 +73,15 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, transformation_errors=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, unrecognised, transform raised) and must not be graded.
+    value = result.get(CRITERIA_KEY) if isinstance(result, dict) else None
+    measured = value is not None
+    not_measured_reasons = transformation_errors or fail_reasons or [CRITERIA_KEY + " could not be measured from the response"]
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "success", "errors": []},
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else not_measured_reasons},
             "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
             "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
             "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": []},
@@ -115,5 +121,7 @@ def evaluate(records):
     if len(enabled) > 0:
         return True, summary, [str(len(enabled)) + " of " + str(len(records)) + " Druva backup sets report backupEnabled = Yes"]
     if len(records) == 0:
-        return False, summary, ["Druva Resource Status report returned no resources"]
+        # An empty Resource Status report lists nothing to judge (same rule as
+        # unprotectedResourcesCount on this report): not measured.
+        return None, summary, ["Druva Resource Status report returned no resources; nothing was measured"]
     return False, summary, ["No Druva backup set reports backupEnabled = Yes (" + str(len(records)) + " reported)"]

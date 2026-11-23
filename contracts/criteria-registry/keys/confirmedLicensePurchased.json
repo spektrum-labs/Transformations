@@ -1,0 +1,88 @@
+{
+  "name": "confirmedLicensePurchased",
+  "revision": 1,
+  "status": "contested",
+  "definition": "The vendor reports an active entitlement (licence or subscription) for the product the integration connects to. Licence evidence, not control evidence: a true says the customer owns the tool, nothing about whether it is configured or working.",
+  "valueType": "unresolved",
+  "unit": "unknown",
+  "population": "the connected vendor account or tenant",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A vendor response that states the account's licence or subscription is active. A successful authenticated call alone is not that evidence; a field synthesised by our own connector's returnSpec is evidence only of what the returnSpec reads.",
+  "evidenceClass": "entitlement",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [
+    {
+      "name": "hasValidLicense",
+      "note": "Qualys RTA row whose file returns only confirmedLicensePurchased; plan B2b deletes the row as a pure alias. Registered here so the spelling cannot be minted again with a different meaning."
+    }
+  ],
+  "owner": "unknown",
+  "conflict": {
+    "summary": "The meaning is broadly agreed (entitlement) across 92 integrations, 70 files and 126 requirements. The TYPE is not: one implementation returns the strings \"confirmed\"/\"unconfirmed\" and states its requirement compares isEquals \"confirmed\", while the requirements surface declares isEquals with a boolean value. Only the type is contested, so new integrations may still answer the key (integrationPolicy any).",
+    "positions": [
+      {
+        "meaning": "Boolean: the vendor reports an active licence.",
+        "valueType": "boolean",
+        "integrations": [
+          {
+            "srn": "3bc425fa-0638-4bf1-8194-19e7e4f2f43c",
+            "name": "Okta",
+            "note": "one of 92; the full list is the RTA rows for this key"
+          }
+        ],
+        "source": "key-census.csv declared_comparison isEquals, declared_value_type bool; census 2026-10-07: 91 of 107 emitting files return a boolean on a no-evidence body"
+      },
+      {
+        "meaning": "String: \"confirmed\" when Keepit reports the account enabled, subscribed, with a product and no deletion deadline; otherwise \"unconfirmed\" -- including when nothing could be read.",
+        "valueType": "string",
+        "integrations": [
+          {
+            "srn": "4c7c64a7-57e2-469e-a9a6-32483532ad18",
+            "name": "Keepit com-Backup",
+            "note": "verified; RTA row points at refs/heads/main"
+          }
+        ],
+        "files": [
+          "safeguards/backups/keepit/confirmedlicensepurchased.py:15-18,:55,:76,:83"
+        ],
+        "source": "Read for this entry. Its no-evidence branches return \"unconfirmed\", a measured-looking answer, not null. No requirement in the 2026-10-06 requirements snapshot compares this key to the string \"confirmed\"; whether Token-Service's fuzzyEquals matches \"confirmed\" against a boolean true is unverified, so this verified integration's licence check may be unsatisfiable today."
+      }
+    ],
+    "proposedResolution": {
+      "summary": "Boolean, with null when not measured. Keepit moves to a boolean; the 2026-10-06 requirements snapshot holds no requirement comparing to \"confirmed\", so the switch should strand nothing -- confirm against live requirements before shipping.",
+      "splitKeys": []
+    },
+    "decision": {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "Confirm confirmedLicensePurchased is boolean everywhere, and whether licence evidence should ever satisfy a control requirement or only a separate entitlement check -- it is asked under 16 category spellings today, so Wave F moves it more than any other key."
+    }
+  },
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "spektrum-labs-cli reports/qc-2026-10-06/findings/key-census.csv: 92 integrations, 89 vendors, 70 files, 126 requirements, primary_value_types bool/string, asked under 16 category spellings",
+    "spektrum-labs-cli reports/qc-2026-10-06/findings/key-registry.md cross-vendor table: 'keep; it is licence evidence, not control evidence'",
+    "spektrum-labs-cli docs/integration-qc-2026-10-06-remediation-plan.md B2b (hasValidLicense), F staging 1b and Gating (21 categories), 'F-backup-10 withdrawn' (AWS returnSpec synthesises licensePurchased)",
+    "safeguards/backups/keepit/confirmedlicensepurchased.py:15-18,:76",
+    "tools/check_criteria_registry.py census 2026-10-07: 107 files on main emit this key; on no-evidence bodies 91 boolean, 14 null, 1 boolean-or-null, 1 string",
+    "spektrum-labs-cli reports/qc-2026-10-06/requirements.json: zero occurrences of the string \"confirmed\" as a criteria value; wiring.json: Keepit com-Backup (4c7c64a7) row for this key"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-07",
+      "change": "Seeded from the 2026-10-06 integration QC; contested on type only."
+    }
+  ],
+  "notes": "Plan F staging calls 1b 'one boolean: the cheapest possible V3'. That holds per integration, but the key's level is the minimum across 92 implementations, so publishing it at V3 means 92 validation records. Category-unlocking 1b integrations does not require the key to be V3; it requires each unmasked implementation to be."
+}

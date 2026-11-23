@@ -74,7 +74,9 @@ def test_failing_fixture_fails_and_names_the_synced_admin(path, loader):
     out = run(path, loader, fixture(path, "fail"))
     assert verdict(out) is False
     assert out["transformedResponse"]["syncedPrivilegedAccounts"] == 1
-    assert "alex@contoso.com" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+    reason = out["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert "user 3f7a1c2e..." in reason
+    assert "@" not in json.dumps(out["additionalInfo"])  # C4: no user principal name in any reason
 
 
 @pytest.mark.parametrize("path,loader", RUNNERS)
@@ -141,7 +143,7 @@ def test_disabled_synced_admin_is_not_judged(path, loader):
 
 
 @pytest.mark.parametrize("path,loader", RUNNERS)
-def test_group_role_holder_is_not_evaluated(path, loader):
+def test_group_role_holder_without_a_member_read_is_not_evaluated(path, loader):
     body = fixture(path, "pass")
     body["roleAssignments"]["value"].append({
         "id": "grp", "principalId": "9b9b9b9b-0000-4000-8000-000000000009", "roleDefinitionId": GA,
@@ -212,3 +214,106 @@ def test_typed_user_not_in_user_read_is_not_called_a_service_principal(path, loa
     assert not_evaluated(out)
     errors = " ".join(out["additionalInfo"]["dataCollection"]["errors"])
     assert "a user not in the user read" in errors and "service principal" not in errors
+
+
+# --- WI-3b: role-assignable group principals are expanded through their transitive member read --------------------
+
+GROUP = "9b9b9b9b-0000-4000-8000-000000000009"
+MEMBER_CLOUD = "4a4a4a4a-0000-4000-8000-000000000001"
+MEMBER_SYNCED = "4a4a4a4a-0000-4000-8000-000000000002"
+MEMBERS_CTX = "https://graph.microsoft.com/v1.0/$metadata#directoryObjects(id,onPremisesSyncEnabled)"
+
+
+def with_group(path, member_body, member_users=(), group_ids=None):
+    """The passing fixture plus a role-assignable group holding Global Administrator and its member read."""
+    body = fixture(path, "pass")
+    body["roleAssignments"]["value"].append({
+        "id": "grp", "principalId": GROUP, "roleDefinitionId": GA, "directoryScopeId": "/",
+        "principal": {"@odata.type": "#microsoft.graph.group", "id": GROUP}})
+    for uid, synced in member_users:
+        body["users"]["value"].append({"id": uid, "userPrincipalName": "member@example.invalid",
+                                       "accountEnabled": True, "onPremisesSyncEnabled": synced,
+                                       "onPremisesImmutableId": None})
+    body["roleGroups"] = {"groupIds": [{"id": g} for g in (group_ids if group_ids is not None else [GROUP])]}
+    body["roleGroupMembers"] = [member_body]
+    return body
+
+
+def members_body(*rows, **extra):
+    body = {"@odata.context": MEMBERS_CTX, "value": [
+        {"@odata.type": "#microsoft.graph." + kind, "id": mid, "onPremisesSyncEnabled": synced}
+        for mid, kind, synced in rows]}
+    body.update(extra)
+    return body
+
+
+@pytest.mark.parametrize("path,loader", RUNNERS)
+def test_real_shape_cloud_only_group_members_pass(path, loader):
+    body = with_group(path, members_body((MEMBER_CLOUD, "user", None)), [(MEMBER_CLOUD, None)])
+    out = run(path, loader, body)
+    assert verdict(out) is True
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["privilegedPrincipalsThroughGroups"] == 1
+
+
+@pytest.mark.parametrize("path,loader", RUNNERS)
+def test_flipped_synced_group_member_fails_without_naming_it(path, loader):
+    body = with_group(path, members_body((MEMBER_CLOUD, "user", None), (MEMBER_SYNCED, "user", True)),
+                      [(MEMBER_CLOUD, None), (MEMBER_SYNCED, True)])
+    out = run(path, loader, body)
+    assert verdict(out) is False
+    reason = out["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert "user 4a4a4a4a..." in reason and "member@" not in reason
+
+
+@pytest.mark.parametrize("path,loader", RUNNERS)
+def test_empty_group_resolves_to_nobody(path, loader):
+    assert verdict(run(path, loader, with_group(path, members_body()))) is True
+
+
+@pytest.mark.parametrize("path,loader", RUNNERS)
+@pytest.mark.parametrize("member_body", [
+    None, {}, {"error": {"code": "Request_ResourceNotFound"}},
+    {"vendorErrorAsResponse": {"status": 403, "bodyContains": "Authorization_RequestDenied"}},
+    {"error": True, "statusCode": 429, "item": GROUP, "errorType": "rateLimited"},
+    members_body((MEMBER_CLOUD, "user", None), **{"@odata.nextLink": "https://graph.microsoft.com/v1.0/next"}),
+    members_body((MEMBER_CLOUD, "user", None), paginationTruncated=True),
+    {"value": [{"onPremisesSyncEnabled": None}]},
+], ids=["none", "empty", "graph-error", "vendor-403", "item-error", "paged", "truncated", "row-without-id"])
+def test_group_read_failure_fails_closed(path, loader, member_body):
+    out = run(path, loader, with_group(path, member_body, [(MEMBER_CLOUD, None)]))
+    assert not_evaluated(out)
+    assert "role-assignable group; members not read whole" in " ".join(out["additionalInfo"]["dataCollection"]["errors"])
+
+
+@pytest.mark.parametrize("path,loader", RUNNERS)
+def test_synced_group_member_fails_even_when_another_group_is_unread(path, loader):
+    body = with_group(path, members_body((MEMBER_SYNCED, "user", True)), [(MEMBER_SYNCED, True)])
+    body["roleAssignments"]["value"].append({
+        "id": "grp2", "principalId": "9c9c9c9c-0000-4000-8000-00000000000c", "roleDefinitionId": GA,
+        "directoryScopeId": "/", "principal": {"@odata.type": "#microsoft.graph.group",
+                                                "id": "9c9c9c9c-0000-4000-8000-00000000000c"}})
+    assert verdict(run(path, loader, body)) is False
+
+
+@pytest.mark.parametrize("path,loader", RUNNERS)
+def test_group_member_missing_from_the_user_read_is_unresolved(path, loader):
+    out = run(path, loader, with_group(path, members_body((MEMBER_CLOUD, "user", None))))
+    assert not_evaluated(out)
+
+
+@pytest.mark.parametrize("path,loader", RUNNERS)
+def test_nested_groups_and_service_principals_in_the_member_read(path, loader):
+    body = with_group(path, members_body((MEMBER_CLOUD, "user", None), ("5b5b5b5b-0000-4000-8000-000000000005", "group", None),
+                                         ("6c6c6c6c-0000-4000-8000-000000000006", "servicePrincipal", None)),
+                      [(MEMBER_CLOUD, None)])
+    assert verdict(run(path, loader, body)) is True
+
+
+@pytest.mark.parametrize("path,loader", RUNNERS)
+@pytest.mark.parametrize("ids", [[], [GROUP, GROUP], ["9d9d9d9d-0000-4000-8000-00000000000d"]],
+                         ids=["unpaired", "read-twice", "other-group"])
+def test_member_reads_that_cannot_be_paired_fail_closed(path, loader, ids):
+    body = with_group(path, members_body((MEMBER_CLOUD, "user", None)), [(MEMBER_CLOUD, None)], group_ids=ids)
+    if len(ids) == 2:
+        body["roleGroupMembers"] = [members_body((MEMBER_CLOUD, "user", None))] * 2
+    assert not_evaluated(run(path, loader, body))

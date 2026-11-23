@@ -95,12 +95,12 @@ def transform(input):
         if body is None:
             return unknown("No IAM Identity Center data was returned")
         if body.get("error") is True or body.get("__type"):
-            return unknown("AWS or Integration-Service error: " + str(body.get("__type") or body.get("message") or "")[:200])
+            return unknown("AWS or Integration-Service returned an error")
         instances = body.get("Instances")
         if not isinstance(instances, list) or not [i for i in instances if isinstance(i, dict) and i.get("Status") == "ACTIVE"]:
             return unknown("No ACTIVE IAM Identity Center instance: there is no permission-set session to measure")
         arns = body.get("PermissionSets")
-        if not isinstance(arns, list) or body.get("NextToken"):
+        if not isinstance(arns, list) or body.get("NextToken") or body.get("nextToken"):
             return unknown("Permission sets were not read completely")
         if len(arns) == 0:
             return unknown("The IAM Identity Center instance has no permission sets: there is no session to measure")

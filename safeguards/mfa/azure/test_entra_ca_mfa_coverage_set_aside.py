@@ -3,7 +3,7 @@
 When no policy set covers the workforce, the reason lists the workforce MFA policies that did not count: excluded
 group / role / guests, narrowed by platform, device filter or client type, limited to named locations, or no user
 members read in the included groups. At most 5 are named, then "and N more"; names are cut to 80 characters. It
-never produces a verdict. Synthetic estate only, typed JSON values.
+never produces a verdict. Synthetic environment only, typed JSON values.
 """
 import copy
 import importlib.util

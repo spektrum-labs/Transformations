@@ -1,0 +1,37 @@
+{
+  "name": "hasMultiSourceTelemetryIntegration",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when the vendor's own incident records show alerts raised by two or more distinct telemetry sources (tools), so the MDR correlates across more than one feed.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the incidents the connected managed-detection tenant lists",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "Two or more distinct alert sources across the incidents read (proof even on a partial read), or a complete read of at least one incident in which every incident names the same single source (False). Sources are compared on one normalised key per incident (the vendor's slug when present, else its display label, lower-case letters and digits only), so a slug and its label are one source, not two. No incident, no named source, an error or refused answer, or a partial read showing one source is not measured; so is a complete read in which the named incidents share one source while other incidents name none, since those could come from a second tool.",
+  "evidenceClass": "presence",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/mdr/critical-start/hasMultiSourceTelemetryIntegration.py (Critical Start ZTAP, GET /api/1.5/incidents/, Incident.alert_source; vendor client: github.com/demisto/content Packs/ZeroTrustAnalyticsPlatform)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-05",
+      "change": "Registered so the Critical Start transform can emit it."
+    }
+  ],
+  "notes": "Registered so the transform named in citations can emit it. Other vendors that use the same name were not reviewed, so the key stays proposed and V0. Sources are counted by the product that raised the alert; several products of one vendor (e.g. a suite's email, identity and SIEM feeds) count as distinct tools."
+}

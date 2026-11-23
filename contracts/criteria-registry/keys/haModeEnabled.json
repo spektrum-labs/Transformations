@@ -1,0 +1,40 @@
+{
+  "name": "haModeEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "High availability is enabled and the running configuration is synchronised with the peer.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the one firewall the credential reaches",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "The high availability state showing HA enabled and the running configuration synchronised with the peer.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/haModeEnabled.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "result/enabled (yes or no) and result/group/running-sync ('synchronized') are from vendor examples, UNVERIFIED on a real device. A standalone firewall answers enabled=no and is False."
+}

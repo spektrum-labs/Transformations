@@ -111,9 +111,11 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
-                fail_reasons=["Input validation failed"]
+                api_errors=["Could not read the response: input validation failed"],
+                fail_reasons=["Input validation failed"],
+                recommendations=["Re-evaluate this check once the Exchange Online read succeeds"]
             )
 
         # Check for PowerShell/API error
@@ -133,9 +135,20 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        policies = data.get('policies', [])
-        if not isinstance(policies, list):
-            policies = [policies] if policies else []
+        policies = data.get("policies") if isinstance(data, dict) else None
+        if isinstance(policies, dict) and policies:
+            policies = [policies]
+        if not isinstance(policies, list) or (policies and not any(isinstance(x, dict) for x in policies)):
+            # Missing or non-list: an error body or a failed read, not evidence of a missing control.
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["Could not read anti-phishing policies"],
+                fail_reasons=["Anti-phishing policies were not returned, so this check could not be evaluated"],
+                recommendations=["Re-evaluate this check once the Exchange Online read succeeds"]
+            )
+
+        policies = [x for x in policies if isinstance(x, dict)]  # skip unreadable entries
 
         # Find policies that meet all required settings
         matching_policies = [

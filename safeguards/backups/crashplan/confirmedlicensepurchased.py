@@ -59,8 +59,6 @@ def transform(input):
         return {
             "confirmedLicensePurchased": confirmed,
             "userId": str(user_id),
-            "username": username,
-            "email": email,
             "status": status,
             "orgId": str(org_id)
         }

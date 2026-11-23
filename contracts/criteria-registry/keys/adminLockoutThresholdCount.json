@@ -1,0 +1,44 @@
+{
+  "name": "adminLockoutThresholdCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of failed administrator logins before lockout (Device > Setup > Management > Authentication Settings). When lockout is off (0) the key is Not evaluated, so a threshold requirement can never pass on it.",
+  "valueType": "integer",
+  "unit": "count",
+  "population": "the global administrator lockout setting of the one firewall the credential reaches",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "The management authentication settings showing a failed-attempts value from 1 to 10; lockout off (0) is Not evaluated.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/adminLockoutThresholdCount.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "Lockout off (0) is reported as null (Not evaluated), never 0, so a lessThan or lessThanOrEqual requirement can never pass on a firewall with lockout off. deviceconfig/setting/management/admin-lockout/failed-attempts (0 to 10) from the CLI hierarchy; 0 means lockout is off. Off has no threshold, so it is reported as null (never 0, which would pass a less-than-or-equal requirement) with the reason in the fail reasons. Per-authentication-profile lockout settings are not read; an absent setting is Not evaluated, not 0, because the default is not evidenced.",
+  "domain": {
+    "min": 1,
+    "max": 10
+  }
+}

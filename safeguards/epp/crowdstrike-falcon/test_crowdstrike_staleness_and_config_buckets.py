@@ -76,22 +76,36 @@ def test_coverage_counts_a_host_unseen_for_46_days_as_not_reporting():
     assert info["dataCollection"]["status"] == "success"
 
 
-def test_coverage_window_boundary_is_inclusive_at_15_days():
-    assert COV.ACTIVE_WINDOW_DAYS == 15
+def test_coverage_window_boundary_is_inclusive_at_45_days():
+    assert COV.ACTIVE_WINDOW_DAYS == 45
     newest = ago(minutes=0)
-    edge = iso(NOW - timedelta(days=15))
-    past = iso(NOW - timedelta(days=15, seconds=1))
+    edge = iso(NOW - timedelta(days=45))
+    past = iso(NOW - timedelta(days=45, seconds=1))
     result, _ = cov([host(0, seen=newest), host(1, seen=edge), host(2, seen=past)])
     assert (result["activeDevices"], result["notReportingDevices"]) == (2, 1)
 
 
+def test_coverage_window_cannot_be_stretched_by_a_fleet_whose_newest_checkin_is_old():
+    """The clock follows the data, but a host is never accepted more than CACHE_GRACE_DAYS past the window
+    from now. Newest check-in 44 days ago: hosts seen 80 days ago are not reporting, while hosts seen
+    with the newest one still are, because 44 days is inside the window from the wall clock."""
+    assert COV.CACHE_GRACE_DAYS == 3
+    newest = ago(days=44)
+    result, _ = cov([host(0, seen=newest), host(1, seen=ago(days=80)), host(2, seen=ago(days=80))])
+    assert (result["activeDevices"], result["notReportingDevices"]) == (1, 2)
+    result, _ = cov([host(i, seen=newest) for i in range(3)])
+    assert (result["activeDevices"], result["notReportingDevices"]) == (3, 0)
+    result, _ = cov([host(0, seen=ago(days=49)), host(1, seen=ago(days=49))])
+    assert (result["activeDevices"], result["notReportingDevices"]) == (0, 2)
+
+
 def test_coverage_pass_reason_prints_the_window_and_no_longer_claims_unchecked_recency():
-    _, info = cov([host(0), host(1, seen=ago(days=20))])
+    _, info = cov([host(0), host(1, seen=ago(days=60))])
     reason = info["evaluation"]["passReasons"][0]
-    assert "within 15 days of the newest check-in" in reason
+    assert "within 45 days of the newest check-in" in reason
     assert "recent last_seen" not in reason
-    assert "1 not seen within 15 days" in info["evaluation"]["failReasons"][0]
-    assert any("not checked in for more than 15 days" in r for r in info["evaluation"]["recommendations"])
+    assert "1 not seen within 45 days" in info["evaluation"]["failReasons"][0]
+    assert any("not checked in for more than 45 days" in r for r in info["evaluation"]["recommendations"])
 
 
 def test_coverage_missing_or_unreadable_last_seen_is_not_reporting():
@@ -108,14 +122,14 @@ def test_coverage_reads_nanosecond_timestamps():
 
 
 def test_coverage_dark_fleet_uses_the_wall_clock_so_every_host_is_stale():
-    result, info = cov([host(i, seen=ago(days=20)) for i in range(3)])
+    result, info = cov([host(i, seen=ago(days=60)) for i in range(3)])
     assert result["requiredCoveragePercentage"] == 0
     assert result["notReportingDevices"] == 3
     assert info["dataCollection"]["status"] == "success"
 
 
 def test_coverage_breaks_inactive_hosts_down_by_first_failed_test():
-    _, info = cov([host(0), host(1, seen=ago(days=30), status="contained"), host(2, status="bogus"),
+    _, info = cov([host(0), host(1, seen=ago(days=60), status="contained"), host(2, status="bogus"),
                    host(3, rfm="yes")])
     summary = info["transformation"]["inputSummary"]
     assert (summary["notReportingDevices"], summary["statusNotNormalDevices"],
@@ -132,7 +146,7 @@ def test_coverage_contained_hosts_are_covered_and_called_out_separately():
 
 
 def test_coverage_contained_but_stale_or_rfm_is_still_not_covered():
-    result, _ = cov([host(0), host(1, status="contained", seen=ago(days=20)), host(2, status="contained", rfm="yes")])
+    result, _ = cov([host(0), host(1, status="contained", seen=ago(days=60)), host(2, status="contained", rfm="yes")])
     assert (result["activeDevices"], result["containedDevices"]) == (1, 0)
 
 
@@ -154,13 +168,17 @@ def test_timestamps_with_an_offset_are_converted_not_dropped():
 
 def test_coverage_real_last_seen_spread_shifted_to_the_present():
     real = copy.deepcopy(DEVICES)
-    seen = [datetime.fromisoformat(d["last_seen"][:19]) for d in real["resources"]]
-    shift = NOW - max(seen)
+    captured = [datetime.fromisoformat(d["last_seen"][:19]) for d in real["resources"]]
+    shift = NOW - max(captured)
+    seen = [when + shift for when in captured]
+    # The real spread is narrower than 45 days, so the five oldest hosts are pushed past the window.
+    for i in sorted(range(len(seen)), key=lambda i: seen[i])[:5]:
+        seen[i] = NOW - timedelta(days=60)
     for d, when in zip(real["resources"], seen):
-        d["last_seen"] = iso(when + shift)
+        d["last_seen"] = iso(when)
         d["reduced_functionality_mode"] = "no"
     real["meta"]["pagination"]["total"] = len(real["resources"])
-    expected_stale = sum(1 for when in seen if when < max(seen) - timedelta(days=15))
+    expected_stale = sum(1 for when in seen if when < max(seen) - timedelta(days=45))
     assert expected_stale > 0  # the real spread exercises the window
     out = COV.transform(real)["transformedResponse"]
     assert out["notReportingDevices"] == expected_stale
@@ -170,7 +188,7 @@ def test_coverage_real_last_seen_spread_shifted_to_the_present():
 # --- isEPPConfigured: staleness belongs to coverage ---
 
 def test_config_leaves_out_a_stale_host_that_coverage_counts():
-    hosts = [host(0), host(1, seen=ago(days=20), applied=False)]
+    hosts = [host(0), host(1, seen=ago(days=60), applied=False)]
     result, info = cfg(hosts)
     assert (result["isEPPConfigured"], result["protectedHosts"]) == (100, 1)
     assert info["transformation"]["inputSummary"]["notReportingHosts"] == 1
@@ -179,20 +197,25 @@ def test_config_leaves_out_a_stale_host_that_coverage_counts():
 
 
 def test_config_all_hosts_stale_is_not_evaluated():
-    result, info = cfg([host(i, seen=ago(days=40)) for i in range(3)])
+    result, info = cfg([host(i, seen=ago(days=60)) for i in range(3)])
     assert result["isEPPConfigured"] is None
     assert info["dataCollection"]["status"] == "error"
 
 
-def test_both_checks_share_one_window_and_one_rule():
-    """And so do isEDRDeployed and isPatchManagementEnabledFromHosts: every CrowdStrike host check agrees
-    on which hosts are reporting."""
+def test_every_host_check_shares_one_rule_and_the_window_is_set_per_check():
+    """The clock and the reporting rule are written identically in every CrowdStrike host check. The
+    window is not: coverage and deployment use CrowdStrike's own 45-day host retention, while the
+    configuration, EDR and patch checks keep 15 days."""
     files = ("requiredCoveragePercentage.py", "isEPPConfiguredFromHosts.py", "isEDRDeployed.py",
-             "isPatchManagementEnabledFromHosts.py")
-    sources = [(HERE / f).read_text() for f in files]
-    for name in ("ACTIVE_WINDOW_DAYS = ", "def parse_time(", "def reference_clock(", "def is_reporting("):
-        bodies = {src[src.index(name):].split("\n\n\n")[0] for src in sources}
+             "isEPPDeployed.py", "isPatchManagementEnabledFromHosts.py")
+    sources = {f: (HERE / f).read_text() for f in files}
+    for name in ("def parse_time(", "def reference_clock(", "def is_reporting("):
+        bodies = {src[src.index(name):].split("\n\n\n")[0] for src in sources.values()}
         assert len(bodies) == 1, name
+    windows = {f: int(src.split("ACTIVE_WINDOW_DAYS = ")[1].split("\n")[0]) for f, src in sources.items()}
+    assert windows == {"requiredCoveragePercentage.py": 45, "isEPPDeployed.py": 45,
+                       "isEPPConfiguredFromHosts.py": 15, "isEDRDeployed.py": 15,
+                       "isPatchManagementEnabledFromHosts.py": 15}
 
 
 # --- isEPPConfigured: three buckets, three fixes ---

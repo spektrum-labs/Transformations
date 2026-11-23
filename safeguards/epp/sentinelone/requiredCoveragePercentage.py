@@ -9,8 +9,8 @@ SentinelOne isActive reflects only a recent management-console check-in/online
 session, so it is false for asleep, offline, or roaming endpoints that remain
 fully installed and protected (activeProtection still [edr], mitigationMode
 still protect/detect). Gating coverage on isActive understates protection and
-produced false "low coverage" failures — e.g. UFT reported 265/919 = 28.84%
-while the isEPPConfigured / isEPPEnabled checks found all 919 agents installed
+produced false "low coverage" failures: a fleet with most agents asleep or roaming read
+under 30% while the isEPPConfigured / isEPPEnabled checks found every agent installed
 and in an enforcing mitigation mode.
 """
 
@@ -63,7 +63,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
     """Create the standardized 5-section transformation response."""
-    if validation is None:
+    if not isinstance(validation, dict):
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
     transform_err_list = transformation_errors or []
@@ -105,18 +105,24 @@ def find_agent_list(obj):
     """(agents, pagination, error) from the getEndpoints response, whatever wrapper Token-Service hands over."""
     cur = obj
     for depth in range(6):
+        if isinstance(cur, bytes):
+            cur = cur.decode("utf-8", "replace")
         if isinstance(cur, str):
+            if not cur.strip():
+                return None, None, "The SentinelOne agent list is empty (no body was returned), so it cannot be read."
             try:
                 cur = json.loads(cur)
             except Exception:
-                return None, None, None
+                # A body cut off in transit arrives as text that stops mid-JSON (IS, Nov 2026).
+                return None, None, ("The SentinelOne agent list is not valid JSON (" + str(len(cur))
+                                    + " characters; it may have been cut off in transit), so it cannot be read.")
         if isinstance(cur, list):
             return cur, None, None
         if not isinstance(cur, dict):
             return None, None, None
         if cur.get("errors") or cur.get("error") is True:
             detail = cur.get("errors") or cur.get("message") or cur.get("errorMessage") or "error"
-            return None, None, json.dumps(detail)[:300]
+            return None, None, "SentinelOne returned an error instead of an agent list: " + json.dumps(detail)[:300]
         if isinstance(cur.get("data"), list):
             pagination = cur.get("pagination")
             return cur["data"], (pagination if isinstance(pagination, dict) else None), None
@@ -140,7 +146,7 @@ def complete_agent_read(raw):
     """
     agents, pagination, error = find_agent_list(raw)
     if error is not None:
-        return None, "SentinelOne returned an error instead of an agent list: " + error
+        return None, error
     if agents is None:
         return None, "No SentinelOne agent list in the response; nothing to evaluate."
     if pagination is None:
@@ -160,6 +166,50 @@ def complete_agent_read(raw):
     return agents, None
 
 ACTIVE_WINDOW_DAYS = 15
+
+
+# EDR server / workstation split, under new edr* keys (additive; no existing field reads it). SentinelOne's machineType is one of
+# desktop, laptop, server, kubernetes node, storage or unknown: server is a server, desktop and laptop are
+# workstations, and anything else (or a missing value) is unclassified and counted in neither class.
+WORKSTATION_MACHINE_TYPES = ("desktop", "laptop")
+
+# Every split field, None: what a partial, failed or empty read reports instead of a confident number.
+SPLIT_NOT_MEASURED = {
+    "edrServerCoveragePercentage": None,
+    "edrWorkstationCoveragePercentage": None,
+    "edrTotalServerCount": None,
+    "edrProtectedServerCount": None,
+    "edrTotalWorkstationCount": None,
+    "edrProtectedWorkstationCount": None,
+    "edrUnclassifiedDeviceCount": None,
+}
+
+
+def with_split_not_measured(result):
+    merged = dict(result)
+    merged.update(SPLIT_NOT_MEASURED)
+    return merged
+
+
+def agent_class(agent):
+    """The class of an agent: "server", "workstation", or None (unclassified)."""
+    if not isinstance(agent, dict):
+        return None
+    machine_type = str(agent.get("machineType") or "").strip().lower()
+    if machine_type == "server":
+        return "server"
+    if machine_type in WORKSTATION_MACHINE_TYPES:
+        return "workstation"
+    return None
+
+
+def class_percentage(protected, total):
+    """None when the class has no agent: no agents proves nothing, so it is never 0."""
+    if total <= 0:
+        return None
+    # Floored to two decimals, never rounded: 100 only when every device in the class is protected,
+    # and 94.9 can never be lifted to a 95 bar.
+    return (10000 * protected // total) / 100
 
 
 def parse_seen(value):
@@ -205,7 +255,7 @@ def transform(input):
     agents, problem = complete_agent_read(raw)
     if problem is not None:
         return create_response(
-            result={"requiredCoveragePercentage": None},
+            result=with_split_not_measured({"requiredCoveragePercentage": None}),
             validation=validation,
             fail_reasons=[problem],
             api_errors=[problem],
@@ -237,11 +287,11 @@ def transform(input):
             if stale_count else "No SentinelOne agents were returned; there is nothing to measure"
         )
         return create_response(
-            result={
+            result=with_split_not_measured({
                 "requiredCoveragePercentage": None,
                 "totalEnrolledAgents": 0,
                 "staleAgentCount": stale_count,
-            },
+            }),
             validation=validation,
             api_errors=[reason],
             fail_reasons=[reason],
@@ -256,8 +306,20 @@ def transform(input):
     uninstalled_count = 0
     decommissioned_count = 0
     inactive_installed_count = 0
+    servers = 0
+    protected_servers = 0
+    workstations = 0
+    protected_workstations = 0
+    unclassified = 0
 
     for agent in items:
+        kind = agent_class(agent)
+        if kind == "server":
+            servers = servers + 1
+        elif kind == "workstation":
+            workstations = workstations + 1
+        else:
+            unclassified = unclassified + 1
         if not isinstance(agent, dict):
             continue
         if coerce_bool(agent.get("isUninstalled")):
@@ -272,6 +334,10 @@ def transform(input):
         # tracks a recent console check-in and flips to false for offline but
         # still-protected endpoints.
         installed_count = installed_count + 1
+        if kind == "server":
+            protected_servers = protected_servers + 1
+        elif kind == "workstation":
+            protected_workstations = protected_workstations + 1
         is_active = agent.get("isActive")
         if is_active is not None and not coerce_bool(is_active):
             inactive_installed_count = inactive_installed_count + 1
@@ -336,6 +402,14 @@ def transform(input):
             "uninstalledAgents": uninstalled_count,
             "decommissionedAgents": decommissioned_count,
             "staleAgentCount": stale_count,
+            # The split, over the same judged agents and the same covered test as above.
+            "edrServerCoveragePercentage": class_percentage(protected_servers, servers),
+            "edrWorkstationCoveragePercentage": class_percentage(protected_workstations, workstations),
+            "edrTotalServerCount": servers,
+            "edrProtectedServerCount": protected_servers,
+            "edrTotalWorkstationCount": workstations,
+            "edrProtectedWorkstationCount": protected_workstations,
+            "edrUnclassifiedDeviceCount": unclassified,
         },
         validation=validation,
         pass_reasons=pass_reasons,
