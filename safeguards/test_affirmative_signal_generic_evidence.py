@@ -19,6 +19,7 @@ import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+# The Windows Defender (7BC425FA) behavioural, patch and removable-media copies are not listed: #1431 makes them never-measured.
 FILES = [
     "0450D686-D997-4E20-B82F-827F61CB8371/confirmedlicensepurchased.py",
     "0C281CE9-8024-4D70-AC85-D923A6B9635C/confirmedlicensepurchased.py",
@@ -32,10 +33,7 @@ FILES = [
     "2BC425FA-0638-4BF1-8194-19E7E4F2F43C/confirmedlicensepurchased.py",
     "2BC425FA-0638-4BF1-8194-19E7E4F2F43C/isidpenabled.py",
     "52beaa98-6ced-4a84-b6d5-faea40e0ffef/confirmedlicensepurchased.py",
-    "7BC425FA-0638-4BF1-8194-19E7E4F2F43C/isbehavioralmonitoringvalid.py",
     "7BC425FA-0638-4BF1-8194-19E7E4F2F43C/isidpenabled.py",
-    "7BC425FA-0638-4BF1-8194-19E7E4F2F43C/ispatchmanagementenabled.py",
-    "7BC425FA-0638-4BF1-8194-19E7E4F2F43C/isremovablemediacontrolled.py",
     "86ded564-522a-4c9b-9106-365e4cbdec7d/confirmedlicensepurchased.py",
     "86ded564-522a-4c9b-9106-365e4cbdec7d/confirmlicensepurchased.py",
     "86ded564-522a-4c9b-9106-365e4cbdec7d/is_mfa_logging_enabled.py",

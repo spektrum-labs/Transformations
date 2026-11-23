@@ -126,8 +126,8 @@ def transform_evidence(input):
                     inactive_factor_count = inactive_factor_count + 1
                     user_inactive_here = user_inactive_here + 1
             if user_inactive_here > 0 and len(inspected_examples) < 5:
-                username = u.get("username") or u.get("email") or u.get("_id") or "unknown"
-                inspected_examples.append(f"{username} ({user_inactive_here} inactive factor(s))")
+                user_id = u.get("_id") or u.get("id") or "unknown"
+                inspected_examples.append(f"user id {user_id} ({user_inactive_here} inactive factor(s))")
 
     result = {
         "inactiveMfaFactorsCount": inactive_factor_count,

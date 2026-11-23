@@ -258,11 +258,38 @@ def test_a_narrowing_condition_means_the_policy_does_not_count(mode, change, exp
 
 
 @pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("exclude,count", [(["4cf7f419-2b1f-4b94-8e9c-f0b2a6ebc33f"], "1"),
+                                           (["4cf7f419-2b1f-4b94-8e9c-f0b2a6ebc33f", "AllTrusted"], "2"),
+                                           (["alltrusted"], "1"), ("AllTrusted", "1")])
+def test_an_excluded_location_means_the_policy_does_not_count(mode, exclude, count):
+    """Named locations are not read: an excluded one may be a range where admin sign-ins skip MFA. The role is a
+    measured gap and the fail reason carries the count of excluded locations, never their ids."""
+    change = {"conditions__locations": {"includeLocations": ["All"], "excludeLocations": exclude}}
+    out = load(mode)(graph(edited(CA001_NO_GROUP, **change)))
+    assert pair(out) == (False, "success")
+    assert "exclude " + count + " location(s)" in " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
+    assert "4cf7f419" not in " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("exclude", [[], ["None"], ["none", ""]])
+def test_no_excluded_location_still_passes(mode, exclude):
+    change = {"conditions__locations": {"includeLocations": ["All"], "excludeLocations": exclude}}
+    assert pair(load(mode)(graph(edited(CA001_NO_GROUP, **change), CA008))) == (True, "success")
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_the_same_location_excluded_by_two_policies_is_counted_once(mode):
+    change = {"conditions__locations": {"includeLocations": ["All"], "excludeLocations": ["AllTrusted"]}}
+    out = load(mode)(graph(edited(CA001_NO_GROUP, **change), edited(CA008, **change)))
+    assert pair(out) == (False, "success")
+    assert "exclude 1 location(s)" in " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
+
+
+@pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("change,expected", [
     ({"conditions__users__excludeUsers": ["breakglass-1", "breakglass-2"]}, "2 excluded user(s)"),
-    ({"conditions__locations": {"includeLocations": ["All"], "excludeLocations": ["AllTrusted"]}},
-     "1 excluded location(s)"),
-], ids=["two-break-glass-accounts", "trusted-locations-excluded"])
+], ids=["two-break-glass-accounts"])
 def test_a_condition_the_strict_checks_allow_is_reported_and_does_not_change_the_verdict(mode, change, expected):
     out = load(mode)(graph(edited(CA001_NO_GROUP, **change)))
     assert pair(out) == (True, "success")
