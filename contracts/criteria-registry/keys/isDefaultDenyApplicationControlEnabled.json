@@ -1,0 +1,38 @@
+{
+  "name": "isDefaultDenyApplicationControlEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Every current managed ThreatLocker computer enforces default-deny application control: Application Control in Secure Mode with no active maintenance mode. One computer short is a fail.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "managed computers (not deleted, last check-in within 15 days of the newest check-in), all pages",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "every judged computer in mode Secure with activeMaintenanceModes empty, from a complete read (distinct computerIds equal to totalRows)",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Endpoint Security"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/epp/threatlocker/isDefaultDenyApplicationControlEnabled.py (the file's own docstring and rule)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-23",
+      "change": "Registered at V0 so the key stops being grandfathered by the allowlist; proposed, single emitter, definition taken from the emitting transform."
+    }
+  ]
+}
