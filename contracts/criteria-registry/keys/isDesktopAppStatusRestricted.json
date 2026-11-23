@@ -1,0 +1,39 @@
+{
+  "name": "isDesktopAppStatusRestricted",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The IDrive client configuration is provisioned in thin-client mode: the decoded configuration_id token carries desktopAppStatus false, so end users are restricted from pausing or changing backups in the desktop app.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the one client configuration token returned by getConfigurationId",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "configuration_id present, decodes to JSON with a desktopAppStatus field, and that field is falsy",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Backups"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/backups/idrive/isDesktopAppStatusRestricted.py (the file's own docstring and rule)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-23",
+      "change": "Registered at V0 so the key stops being grandfathered by the allowlist; proposed, single emitter, definition taken from the emitting transform."
+    }
+  ],
+  "notes": "Reads the default client configuration token, not each enrolled device."
+}

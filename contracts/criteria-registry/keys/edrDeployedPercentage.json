@@ -1,0 +1,46 @@
+{
+  "name": "edrDeployedPercentage",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Percentage of the computers and servers in the vendor's endpoint inventory that have the EDR (xdr) product installed. It is the figure isEDRDeployed compares to its threshold.",
+  "valueType": "number",
+  "unit": "percent",
+  "domain": {
+    "min": 0,
+    "max": 100
+  },
+  "population": "computers plus servers in the endpoint list (mobile devices excluded).",
+  "polarity": "higher_is_better",
+  "evidenceRequiredForTrue": "A read of the endpoint list; 100 only when every computer and server in it carries the xdr product. It proves the product is installed, not that the policy setting sending its data to the vendor is on: the endpoint list carries no policy settings.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Endpoint Security",
+    "MDR"
+  ],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {"srn": "1bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Sophos - MDR"}
+  ],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/epp_transform.py (coverage_scores[\"edrDeployedPercentage\"])"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-23",
+      "change": "Registered when the Sophos endpoint transform began emitting it alongside isEDRDeployed (#1075)."
+    }
+  ],
+  "notes": "Companion to isEDRDeployed, which compares this figure to EDR_DEPLOYED_THRESHOLD. No requirement reads this key directly."
+}

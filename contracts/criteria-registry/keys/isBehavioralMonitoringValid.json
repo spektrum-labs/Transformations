@@ -1,0 +1,135 @@
+{
+  "name": "isBehavioralMonitoringValid",
+  "revision": 1,
+  "status": "contested",
+  "definition": "CONTESTED -- no single meaning is held: eleven wired integrations (ten with a production RTA row, Halcyon in Integration-Service config only) answer this key through six files with six incompatible truth conditions, from 'the API returned any record' to 'every applied policy has behaviour detection on', listed under conflict.positions; until the owner rules, no new implementation may be added under this name.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "unknown -- differs per position: whatever records a body carries (endpoints, alerts), Falcon prevention policies, Sophos Threat Protection policies, ThreatDown policies, one Kaseya policy object, or ManageEngine vulnerability findings",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "unknown -- the six positions require six different reads, and the weakest (P1) requires none that concerns behaviour; see conflict.positions",
+  "evidenceClass": "unknown",
+  "notMeasured": {"value": null, "envelope": "additionalInfo.dataCollection.status == \"error\""},
+  "emptyPopulationMeans": "undecided",
+  "allowedCategories": ["Endpoint Security", "MDR"],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {"srn": "1bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Sophos - MDR"},
+    {"srn": "7bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Windows Defender"},
+    {"srn": "f451573a-d0ce-4d67-a014-80dc8e636fcb", "name": "Arctic Wolf - EDR Endpoint Security"},
+    {"srn": "bbc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Halcyon", "note": "wired in Integration-Service integration_configs/epp/halcyon.json; no RTA row for this key in the 2026-10-06 production definition snapshot"},
+    {"srn": "d61a39d7-f00a-4963-bc9c-38164918e883", "name": "CrowdStrike Falcon-Endpoint Security"},
+    {"srn": "765f3eb2-73f6-486f-b16e-5996d69f6b8e", "name": "Crowdstrike - XDR Falcon"},
+    {"srn": "dc607d10-7b24-4310-93aa-369cdf407240", "name": "Crowdstrike - MDR", "note": "RTA row pinned to 110c82f7, byte-identical to main for this file"},
+    {"srn": "1a13bab7-9377-428a-b595-ba0843ec3366", "name": "Sophos - EDR Endpoint Security", "note": "RTA row pinned to a9fbd857, which 404'd at the 2026-10-06 QC; that commit is now on develop and differs from main only in the exception path"},
+    {"srn": "f9522162-b193-44de-8a1f-9a03f36794b9", "name": "Threatdown - Endpoint Security"},
+    {"srn": "5deab521-30a8-4250-9c18-2f02444b893f", "name": "Kaseya", "note": "category not set in the 2026-10-06 snapshot"},
+    {"srn": "a43b5841-639c-4db4-8e42-df7828d55ec2", "name": "ManageEngine - Endpoint Security"}
+  ],
+  "aliases": [],
+  "owner": "J.J.",
+  "conflict": {
+    "summary": "All emitters agree on the TYPE (boolean) and disagree on what true asserts. Six wired meanings: the API returned any record or on-flag (no behaviour setting read); at least one enabled, assigned Falcon prevention policy has a behaviour/ML/IOA-keyword setting on; every applied Sophos Threat Protection policy, Base Policy included, has real-time scanning and behaviour detection on; at least one ThreatDown policy has a behavioural, EDR or real-time-protection setting on; one Kaseya policy object has behavioural analysis on plus alerting or automated response; ManageEngine vulnerability scanning shows activity. Two further files are unwired and hold a seventh and eighth view: safeguards/epp/arcticwolf-aurora/isbehavioralmonitoringvalid.py (every device reports background_detection true) and the identical safeguards/epp/crowdstrike/ and safeguards/epp/synqly/ isbehavioralmonitoringvalid.py (any alert, detection or detection/prevention-named policy exists). safeguards/epp/crowdstrike/epp_transform.py emits the key only as null on its no-evidence path and holds no position.",
+    "positions": [
+      {
+        "meaning": "P1 -- the read returned something affirmative: an explicit isBehavioralMonitoringValid field in the body (passed through unchanged), an on-flag or status among generic keys, or any non-empty records list (value, items, data, devices, agents, ...). Nothing about behaviour detection is read.",
+        "valueType": "boolean",
+        "population": "whatever records the wired read returns: endpoints at Sophos - MDR (getEndpoints), alerts at Windows Defender (GET /api/alerts)",
+        "integrations": [
+          {"srn": "1bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Sophos - MDR"},
+          {"srn": "7bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Windows Defender"},
+          {"srn": "f451573a-d0ce-4d67-a014-80dc8e636fcb", "name": "Arctic Wolf - EDR Endpoint Security"},
+          {"srn": "bbc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Halcyon", "note": "Integration-Service config only"}
+        ],
+        "files": [
+          "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/isbehavioralmonitoringvalid.py",
+          "safeguards/7BC425FA-0638-4BF1-8194-19E7E4F2F43C/isbehavioralmonitoringvalid.py",
+          "safeguards/BBC425FA-0638-4BF1-8194-19E7E4F2F43C/isbehavioralmonitoringvalid.py",
+          "safeguards/cac4b80f-a930-415e-b1e3-de285fe78452/isbehavioralmonitoringvalid.py (unwired; identical to BBC425FA)"
+        ],
+        "source": "Code read for this entry: affirmative_signal() and data.get('isBehavioralMonitoringValid', default_value) (1BC425FA :94-107, 7BC425FA/BBC425FA/cac4b80f :94-98). QC 2026-10-06 F-endpoint-mdr-01 (Windows Defender: true on one alert, false on a clean tenant) and F-endpoint-mdr-02 (Sophos - MDR: no reachable false for a deployed tenant). The passthrough can emit a non-boolean if a body carries that field."
+      },
+      {
+        "meaning": "P2 -- at least one Falcon prevention policy is enabled, assigned to at least one host group, and has at least one enabled setting whose id or name contains a behaviour keyword (ioa, behavior, interprocess, exploit, cloudantimalware, adwarepup, malware, ...).",
+        "valueType": "boolean",
+        "population": "Falcon prevention policies (GET /policy/combined/prevention/v1)",
+        "integrations": [
+          {"srn": "d61a39d7-f00a-4963-bc9c-38164918e883", "name": "CrowdStrike Falcon-Endpoint Security"},
+          {"srn": "765f3eb2-73f6-486f-b16e-5996d69f6b8e", "name": "Crowdstrike - XDR Falcon"},
+          {"srn": "dc607d10-7b24-4310-93aa-369cdf407240", "name": "Crowdstrike - MDR", "note": "pinned 110c82f7, identical to main"}
+        ],
+        "files": ["safeguards/epp/crowdstrike-falcon/isBehavioralMonitoringValid.py"],
+        "source": "Code read for this entry: BEHAVIORAL_KEYWORDS :70-73, verdict :202-208; null with dataCollection error when no policy records were read (:144-159). The keyword list includes plain malware and adware/PUP settings, so a signature-only policy can satisfy it."
+      },
+      {
+        "meaning": "P3 -- every applied Sophos Threat Protection policy, and the Base Policy, which must be present, has real-time scanning on and Detect malicious behaviour on (legacy HIPS accepted when the new key is absent).",
+        "valueType": "boolean",
+        "population": "Sophos Central Threat Protection policies that govern someone (Base Policy plus enabled, assigned policies); server policies not read",
+        "integrations": [
+          {"srn": "1a13bab7-9377-428a-b595-ba0843ec3366", "name": "Sophos - EDR Endpoint Security", "note": "pinned a9fbd857, 404 at the 2026-10-06 QC"}
+        ],
+        "files": ["safeguards/epp/sophos/isbehavioralmonitoringvalid.py"],
+        "source": "Code read for this entry (origin/main): judge_policy :197-220, verdict :283. QC 2026-10-06 F-UNCAT-02b (row dead at its pin)."
+      },
+      {
+        "meaning": "P4 -- at least one ThreatDown policy has a behavioural-monitoring, anomaly-detection, EDR or suspicious-activity setting on, or real-time protection on as a proxy; policy enablement and assignment are not checked.",
+        "valueType": "boolean",
+        "population": "ThreatDown (Nebula) policies",
+        "integrations": [{"srn": "f9522162-b193-44de-8a1f-9a03f36794b9", "name": "Threatdown - Endpoint Security"}],
+        "files": ["safeguards/epp/threatdown/isbehavioralmonitoringvalid.py"],
+        "source": "Code read for this entry: evaluate() :65-98."
+      },
+      {
+        "meaning": "P5 -- one Kaseya VSA endpoint-protection policy object is enabled, has behavioural analysis, behaviour monitoring or heuristics on, AND has alerting or an automated response configured.",
+        "valueType": "boolean",
+        "population": "one policy object (data.Data or the body itself)",
+        "integrations": [{"srn": "5deab521-30a8-4250-9c18-2f02444b893f", "name": "Kaseya", "note": "wired to method isEPPDeployed, not a policy read"}],
+        "files": ["safeguards/epp/kaseya/vsa/isbehavioralmonitoringvalid.py"],
+        "source": "Code read for this entry: :55-146. The verdict is an and/or expression over vendor values (:143-146), so a non-boolean vendor value can pass through. Integration-Service integration_configs/epp/kaseya.json routes the key to method isEPPDeployed, which does not obviously return a policy object -- unverified."
+      },
+      {
+        "meaning": "P6 -- ManageEngine vulnerability scanning shows activity: any vulnerability record, a scan status of active/enabled/completed/success, or a vulnerabilities field present at all. This is a vulnerability-management signal, not behaviour monitoring.",
+        "valueType": "boolean",
+        "population": "ManageEngine Endpoint Central vulnerability findings (GET /dcapi/threats/vulnerabilities)",
+        "integrations": [{"srn": "a43b5841-639c-4db4-8e42-df7828d55ec2", "name": "ManageEngine - Endpoint Security"}],
+        "files": ["safeguards/epp/manageengine/isbehavioralmonitoringvalid.py"],
+        "source": "Code read for this entry: evaluate() :88-97 and the file's own docstring ('Whether vulnerability scanning and threat detection are actively monitoring endpoints')."
+      }
+    ],
+    "decision": {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "What does isBehavioralMonitoringValid assert -- that a behaviour-detection setting is on in every policy that governs an endpoint (P3), in at least one applied policy (P2), or something weaker -- and which of the eleven integrations stay on it? P1 and P6 measure no behaviour setting at all and need either a real read or removal from this key before Wave F."
+    }
+  },
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/isbehavioralmonitoringvalid.py",
+    "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/test_no_endpoints_not_evaluated.py",
+    "safeguards/7BC425FA-0638-4BF1-8194-19E7E4F2F43C/isbehavioralmonitoringvalid.py",
+    "safeguards/BBC425FA-0638-4BF1-8194-19E7E4F2F43C/isbehavioralmonitoringvalid.py",
+    "safeguards/cac4b80f-a930-415e-b1e3-de285fe78452/isbehavioralmonitoringvalid.py",
+    "safeguards/epp/arcticwolf-aurora/isbehavioralmonitoringvalid.py",
+    "safeguards/epp/arcticwolf-aurora/test_arcticwolf_aurora.py",
+    "safeguards/epp/crowdstrike-falcon/isBehavioralMonitoringValid.py",
+    "safeguards/epp/crowdstrike/epp_transform.py: UNMEASURED_KEYS and unevaluated() -- null only",
+    "safeguards/epp/crowdstrike/test_crowdstrike_mdr_routing_fail_closed.py",
+    "safeguards/epp/crowdstrike/isbehavioralmonitoringvalid.py",
+    "safeguards/epp/kaseya/vsa/isbehavioralmonitoringvalid.py",
+    "safeguards/epp/manageengine/isbehavioralmonitoringvalid.py",
+    "safeguards/epp/synqly/isbehavioralmonitoringvalid.py",
+    "safeguards/epp/threatdown/isbehavioralmonitoringvalid.py",
+    "safeguards/epp/sophos/isbehavioralmonitoringvalid.py",
+    "safeguards/epp/sophos/test_isbehavioralmonitoringvalid.py",
+    "Integration-Service integration_configs: emailsecurity/sophos.json, epp/windowsdefender.json, epp/arcticwolf.json, epp/halcyon.json, epp/crowdstrike-falcon.json, epp/crowdstrike.json, epp/kaseya.json, epp/manageengine.json, epp/threatdown.json",
+    "spektrum-labs-cli reports/qc-2026-10-06/wiring.json: the ten production RTA rows for this key and their pins",
+    "spektrum-labs-cli reports/qc-2026-10-06/findings/endpoint-mdr.md F-endpoint-mdr-01, F-endpoint-mdr-02, F-endpoint-mdr-12",
+    "spektrum-labs-cli reports/qc-2026-10-06/findings/uncategorised.md F-UNCAT-02b"
+  ],
+  "changeLog": [
+    {"revision": 1, "date": "2026-10-08", "change": "Registered at V0 so the registry gate can fail push runs on main; contested because the wired emitters answer it with six incompatible truth conditions over six different populations (any record returned, Falcon policies, Sophos policies, ThreatDown policies, one Kaseya policy object, ManageEngine vulnerability findings)."}
+  ]
+}

@@ -1,0 +1,139 @@
+{
+  "name": "isPAMEnabled",
+  "revision": 1,
+  "status": "contested",
+  "definition": "CONTESTED -- no single meaning is held: 23 files answer this key with four incompatible truth conditions (privileged accounts are present, a PAM vault or managed object is enrolled, the vendor's PAM product is activated, or any of several PAM-adjacent feature signals is set), listed under conflict.positions; until the owner rules, no new implementation may be added under this name.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "unknown -- differs per position: privileged identities in an IdP or IGA account listing, credential vaults or managed accounts/systems in a PAM product, one tenant-level activation flag, or a heuristic mix of roles, policies and feature flags",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "unknown -- the four positions require four different reads; see conflict.positions",
+  "evidenceClass": "unknown",
+  "notMeasured": {"value": null, "envelope": "additionalInfo.dataCollection.status == \"error\""},
+  "emptyPopulationMeans": "undecided",
+  "allowedCategories": ["Identity and Access Management"],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {"srn": "d9b6f27a-2e67-4b55-a09e-0784c5de9abd", "name": "Azure AD"},
+    {"srn": "fc3bd97c-5fea-474f-9214-ba5e4ffe49e2", "name": "Savyint"},
+    {"srn": "98ce4b4d-30da-4303-a701-1137f9386557", "name": "Delinea-Identity and Access Management"},
+    {"srn": "31aad50f-61d3-49f3-a8dd-559ad2f16ba1", "name": "BeyondTrust - IAM"},
+    {"srn": "b75b4feb-29a4-4fff-837d-31cd35132d98", "name": "Keeper"}
+  ],
+  "aliases": [],
+  "owner": "J.J.",
+  "conflict": {
+    "summary": "Every emitter agrees on the TYPE (boolean) and disagrees on what true asserts. Four meanings: privileged accounts merely exist (which says nothing about whether a PAM tool manages them); a PAM product has at least one vault or managed account or system enrolled; the vendor's PAM product is activated for the tenant; or any one of several PAM-adjacent feature or naming signals is present. Only one file (JumpCloud) returns null on no evidence; the other 22 return false, so on those a missing or refused read is reported as 'no PAM'.",
+    "positions": [
+      {
+        "meaning": "Privileged accounts are present: the body's privilegedAccounts (or pamPolicies) list is non-empty. Presence of privileged identities in an identity provider or governance tool, not evidence that a PAM vault manages or rotates them.",
+        "valueType": "boolean",
+        "population": "privileged accounts (or PAM policies) returned in an identity-provider or IGA account listing",
+        "integrations": [
+          {"srn": "d9b6f27a-2e67-4b55-a09e-0784c5de9abd", "name": "Azure AD", "note": "Integration-Service config iam/azure-ad.json points at the d9b6f27a file; the file's own comment says its feed (Graph GET /v1.0/users) never carries privilegedAccounts or pamPolicies, so it cannot pass and reports dataCollection error"},
+          {"srn": "fc3bd97c-5fea-474f-9214-ba5e4ffe49e2", "name": "Savyint", "note": "method getPrivilegedAccounts; also true when an 'accounts' list has ANY entry (len(accounts) > 0), privileged or not, or when totalcount > 0"}
+        ],
+        "files": [
+          "safeguards/d9b6f27a-2e67-4b55-a09e-0784c5de9abd/ispamenabled.py",
+          "safeguards/mfa/azure/ispamenabled.py",
+          "safeguards/86ded564-522a-4c9b-9106-365e4cbdec7d/ispamenabled.py",
+          "safeguards/iam/saviynt/ispamenabled.py",
+          "safeguards/iam/cognito/ispamenabled.py",
+          "safeguards/iam/cyberark/ispamenabled.py",
+          "safeguards/iam/dashlane/ispamenabled.py",
+          "safeguards/iam/duo/ispamenabled.py",
+          "safeguards/iam/google/ispamenabled.py",
+          "safeguards/iam/hypr/ispamenabled.py",
+          "safeguards/iam/microsoftentra/ispamenabled.py",
+          "safeguards/iam/msentra/ispamenabled.py",
+          "safeguards/iam/oracleidp/ispamenabled.py",
+          "safeguards/iam/ping_identity/ispamenabled.py",
+          "safeguards/iam/strata/ispamenabled.py",
+          "safeguards/iam/yubico/ispamenabled.py"
+        ],
+        "source": "Code read on origin/main 2026-10-08. The three Microsoft/generic files (d9b6f27a, mfa/azure, 86ded564; mfa/azure and 86ded564 are byte-identical) pass on a non-empty privilegedAccounts or pamPolicies list. Saviynt as noted. The 12 iam/<vendor> files are one byte-identical generic template that is true on a pamEnabled or privilegedAccessManagement flag, a non-empty privilegedAccounts list, any top-level 'enabled' flag, or a non-empty vaults/safes list; none of the 12 is referenced by an Integration-Service config or a production RTA row (unwired). mfa/azure is referenced by Integration-Service config mfa/azure.json, whose integration SRN is not stated in the config and has no isPAMEnabled row in the 2026-10-06 wiring snapshot. 86ded564 is not referenced by any config."
+      },
+      {
+        "meaning": "A PAM product has at least one credential vault, vault account, managed account or managed system enrolled: Delinea needs an active vault with a connection URL; BeyondTrust needs a non-empty vault-account, managed-account or managed-system list.",
+        "valueType": "boolean",
+        "population": "vaults (Delinea), PRA vault accounts, Password Safe managed accounts, or Password Safe managed systems -- one object type per file",
+        "integrations": [
+          {"srn": "98ce4b4d-30da-4303-a701-1137f9386557", "name": "Delinea-Identity and Access Management", "note": "criteria-mapping row, method getVaults (GET /vaultbroker/api/vaults)"},
+          {"srn": "31aad50f-61d3-49f3-a8dd-559ad2f16ba1", "name": "BeyondTrust - IAM", "note": "RTA row method getVaultAccounts -> iam/beyondtrust-pra; Integration-Service config iam/beyondtrust-pra.json"}
+        ],
+        "files": [
+          "safeguards/iam/delinea/ispamenabled.py",
+          "safeguards/iam/beyondtrust-pra/ispamenabled.py",
+          "safeguards/iam/beyondtrust/ispamenabled.py",
+          "safeguards/identity-and-access-management/beyondtrust/isPAMEnabled.py"
+        ],
+        "source": "Code read on origin/main 2026-10-08. iam/beyondtrust (managed accounts) is referenced by Integration-Service config iam/beyondtrust-v2.json, but no production SRN carries an isPAMEnabled RTA row pointing at it (the three BeyondTrust EPM, PRA and Remote Support SRNs with isPAMEnabled mapping rows have no transformationConfig). identity-and-access-management/beyondtrust (managed systems) is unwired. Both BeyondTrust read-a-list files return false with dataCollection success on an empty or unreadable body; the managed-systems file returns null only for a non-dict, non-list body."
+      },
+      {
+        "meaning": "The vendor's own PAM product is activated for the tenant: JumpCloud's GET /api/v2/privileged-access/status reports isPam true (and isActive is not false). A password vault alone (isPwm) is not PAM; which accounts it manages is not read.",
+        "valueType": "boolean",
+        "population": "one tenant-level activation status object",
+        "integrations": [
+          {"srn": "7b2c0d10-2b19-48da-b763-8fbe13077f34", "name": "JumpCloud-Identity and Access Management", "note": "NOT wired for this key: no Integration-Service config on main or develop and no RTA row in the 2026-10-06 snapshot reference this file; listed because the file lives in this integration's folder. Excluded from allowedIntegrations."}
+        ],
+        "files": ["safeguards/identity-and-access-management/jumpcloud/isPAMEnabled.py"],
+        "source": "Code read on origin/main 2026-10-08 (promoted in #985); safeguards/identity-and-access-management/jumpcloud/test_jumpcloud_authtypes_pam.py pins pass, fail and null cases. The only emitter that returns null with dataCollection error on no evidence."
+      },
+      {
+        "meaning": "Any one of several PAM-adjacent signals is present: Keeper sets true on a pam/keeperPAM flag, a privileged-access block, any of five enforcement policies (for example restrict_export), secrets manager, any connection or resource, or a role whose name contains 'admin'; Aquera sets true on a connector or policy whose type or name mentions pam, privileged or vault.",
+        "valueType": "boolean",
+        "population": "a heuristic mix of roles, enforcement policies, feature flags and connector or policy names",
+        "integrations": [
+          {"srn": "b75b4feb-29a4-4fff-837d-31cd35132d98", "name": "Keeper", "note": "RTA row method getUserReport; Integration-Service config iam/keeper.json"}
+        ],
+        "files": [
+          "safeguards/iam/keeper/ispamenabled.py",
+          "safeguards/iam/aquera/ispamenabled.py"
+        ],
+        "source": "Code read on origin/main 2026-10-08. Keeper: a role named 'Admin' alone makes it true, and later checks overwrite earlier ones (a secrets_manager block with enabled false resets an earlier true). Aquera is referenced by Integration-Service config iam/aquera.json, but no production SRN for Aquera was found in the 2026-10-06 snapshot."
+      }
+    ],
+    "decision": {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "Does isPAMEnabled mean 'a PAM product is activated for the tenant', 'a PAM product has at least one vault or managed account or system enrolled', or something stronger (privileged accounts are actually under PAM management), and should the identity-provider emitters that only see privileged accounts or PAM-adjacent signals stop answering it?"
+    }
+  },
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/86ded564-522a-4c9b-9106-365e4cbdec7d/ispamenabled.py",
+    "safeguards/d9b6f27a-2e67-4b55-a09e-0784c5de9abd/ispamenabled.py",
+    "safeguards/mfa/azure/ispamenabled.py",
+    "safeguards/mfa/azure/test_idp_ispamenabled.py",
+    "safeguards/iam/aquera/ispamenabled.py",
+    "safeguards/iam/beyondtrust-pra/ispamenabled.py",
+    "safeguards/iam/beyondtrust/ispamenabled.py",
+    "safeguards/identity-and-access-management/beyondtrust/isPAMEnabled.py",
+    "safeguards/iam/delinea/ispamenabled.py",
+    "safeguards/iam/delinea/test_delinea_checks.py",
+    "safeguards/iam/keeper/ispamenabled.py",
+    "safeguards/iam/saviynt/ispamenabled.py",
+    "safeguards/iam/cognito/ispamenabled.py",
+    "safeguards/iam/cyberark/ispamenabled.py",
+    "safeguards/iam/dashlane/ispamenabled.py",
+    "safeguards/iam/duo/ispamenabled.py",
+    "safeguards/iam/google/ispamenabled.py",
+    "safeguards/iam/hypr/ispamenabled.py",
+    "safeguards/iam/microsoftentra/ispamenabled.py",
+    "safeguards/iam/msentra/ispamenabled.py",
+    "safeguards/iam/oracleidp/ispamenabled.py",
+    "safeguards/iam/ping_identity/ispamenabled.py",
+    "safeguards/iam/strata/ispamenabled.py",
+    "safeguards/iam/yubico/ispamenabled.py",
+    "safeguards/identity-and-access-management/jumpcloud/isPAMEnabled.py",
+    "safeguards/identity-and-access-management/jumpcloud/test_jumpcloud_authtypes_pam.py",
+    "Integration-Service origin/main integration_configs: iam/azure-ad.json, mfa/azure.json, iam/aquera.json, iam/beyondtrust-pra.json, iam/beyondtrust-v2.json, iam/keeper.json, iam/saviynt.json",
+    "spektrum-labs-cli reports/qc-2026-10-06/wiring.json and criteria_mappings.json: isPAMEnabled RTA and mapping rows (BeyondTrust - IAM, Delinea, Keeper, Savyint; Dashlane row has no URL)"
+  ],
+  "changeLog": [
+    {"revision": 1, "date": "2026-10-08", "change": "Registered at V0 so the registry gate can fail push runs on main; contested because the 23 emitters hold four incompatible truth conditions (privileged accounts present, PAM vault or managed object enrolled, vendor PAM activated, PAM-adjacent signals) over different populations."}
+  ]
+}
