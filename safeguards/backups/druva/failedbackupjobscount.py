@@ -321,7 +321,8 @@ def evaluate(jobs, partial, meta, reported):
     if partial:
         return None, summary, ["The Druva Backup Activity read is partial (more pages were not read), so it cannot answer this; nothing was concluded"]
     if len(latest) == 0:
-        return None, summary, ["All " + str(len(jobs)) + " Druva backup jobs read are still in flight (queued, running or waiting for retry), so no finished job was measured"]
+        return None, summary, ["No Druva backup set has a finished result: " + str(len(in_flight)) + " jobs in flight, "
+                               + str(len(retrying)) + " sets waiting for retry"]
     tail = ("; " + str(len(in_flight)) + " in-flight jobs excluded, " + str(len(retrying)) + " sets waiting for retry excluded, "
             + str(len(finished) - len(newest))
             + " earlier jobs superseded by a later run" + (" (read since " + meta["windowStart"] + ")" if meta.get("windowStart") else ""))
