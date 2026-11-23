@@ -1,7 +1,6 @@
 """CrowdStrike - MDR: bodies that are not the evidence a key needs read Unevaluated, not False.
 
-Found 2 Oct 2026 (read-only verification, THL SP-07 at Millar Western, Flagstone Foods and Twin
-Rivers): the MDR definition routed isBehavioralMonitoringValid, isEDRDeployed, isEPPDeployed and
+Found 2 Oct 2026 (read-only verification on three live connections): the MDR definition routed isBehavioralMonitoringValid, isEDRDeployed, isEPPDeployed and
 isEPPConfigured to epp_transform.py through getLicenseStatus (GET
 /installation-tokens/entities/customer-settings/v1). That body has one settings record under
 "resources", which the device loop counted as one unprotected host, so every coverage key read False

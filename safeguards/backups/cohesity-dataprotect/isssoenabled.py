@@ -8,6 +8,34 @@
 import json
 from datetime import datetime, timezone
 
+VENDOR = "Cohesity"
+PRODUCT = "DataProtect"
+METHOD = "getIdps"
+
+
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status is derived from the value, never from a key list:
+    None means the body could not answer the check (not measured, "error"); True or False was measured."""
+    result = {key: value, "reason": reason}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": VENDOR, "product": PRODUCT, "method": METHOD,
+                         "category": "backups", "evaluatedAt": datetime.now(timezone.utc).isoformat(),
+                         "schemaVersion": "2.0"},
+        },
+    }
+
 
 def transform(input):
     """
@@ -73,15 +101,15 @@ def transform(input):
     try:
         body, problem = body_with(input, ["idps"])
         if body is None:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         idps = body.get("idps")
         if idps is None:
             idps = []
         if not isinstance(idps, list):
-            return {key: False, "reason": "idps has an unexpected shape"}
+            return respond(key, None, "idps has an unexpected shape")
         on = [str(i.get("domain") or i.get("name")) for i in idps if isinstance(i, dict) and i.get("isEnabled") is True]
         if not on:
-            return {key: False, "reason": "No enabled SAML identity provider (" + str(len(idps)) + " configured)"}
-        return {key: True, "reason": "Enabled SAML identity providers: " + ", ".join(on)}
+            return respond(key, False, "No enabled SAML identity provider (" + str(len(idps)) + " configured)")
+        return respond(key, True, "Enabled SAML identity providers: " + ", ".join(on))
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "Transformation error: " + str(e)[:300], {"error": str(e)[:300]})

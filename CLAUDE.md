@@ -63,7 +63,7 @@ def _parse_input(input):
 
 - NEVER include customer or company names, customer or company IDs, tenant IDs, passport SRNs or SRN prefixes, domains, per-customer counts, internal hostnames or URLs, or any secret or credential. Not in code, tests, fixtures, comments, commits or PR bodies.
 - Fixtures are synthetic: made-up GUIDs and placeholder values, or a vendor's published well-known identifiers. Never paste a real vendor API response; sanitise it fully first.
-- Describe replay or test results generically ("no new passes; N checks changed") and say "estate A / estate B" instead of naming anyone. Keep per-customer results in local, private notes.
+- Describe replay or test results generically ("no new passes; N checks changed") and say "environment A / environment B" instead of naming anyone. Keep per-customer results in local, private notes.
 - Before opening a PR, grep the diff and the PR body for names, IDs and hostnames.
 
 ### Run checks locally
@@ -80,7 +80,7 @@ def _parse_input(input):
 ### Release rules
 
 - Open PRs against `develop`. `main` is live on merge, so staging -> main merges are release PRs; merge them in order once green with 0 critical/high review findings.
-- Hotfixes to `main` need a twin PR into `develop`.
+- Hotfixes to `main` need a paired PR into `develop`.
 - When resolving a staging -> main (or main -> staging) merge, keep main's version of the six endpoint-rule files changed in PR #693 (`safeguards/epp/ninjaone-endpoint-management/` endpointOperationalStatusUnprotectedCount.py, isEPPConfigured.py, isEPPEnabled.py, isSignatureUpToDate.py, staleSensorCount.py, and `safeguards/epp/sophos/iseppconfigured.py`). A blanket "take staging" silently reverts them.
 - Transform code is cached by the evaluation service for up to 1 hour per task. A SHA-pinned URL takes effect at once; a branch URL can lag. Pins must reference a commit reachable from `main`.
 - Condition operators in the evaluation service: `greaterThan` and `lessThan` are inclusive (>= and <=) and both sides are truncated to int.

@@ -1,7 +1,7 @@
 """isPhishingResistantOnlyEnabled (entra_phishing_resistant_only.py) on GET /v1.0/policies/authenticationMethodsPolicy.
 
 REAL mirrors the shape of a customer tenant read stored 2026-10-03 02:23 ET (Azure AD One-Click,
-getEstateMFAStatus): Microsoft Authenticator (all users) and Software OATH (one group) enabled, every other method
+MFA status method): Microsoft Authenticator (all users) and Software OATH (one group) enabled, every other method
 disabled, policyMigrationState migrationComplete. Group ids are replaced. It passed CSP-001 through
 authTypesAllowed; here it must read False. Each case runs as plain Python and in the Token-Service sandbox replica.
 """

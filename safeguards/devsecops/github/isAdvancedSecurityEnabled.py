@@ -73,6 +73,17 @@ def status_of(sec, name):
     return None
 
 
+def repo_list(data):
+    """The repository array from a body, or None when the body is not one."""
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("data", "repositories"):
+            if isinstance(data.get(key), list):
+                return data.get(key)
+    return None
+
+
 def transform(input):
     """GitHub Advanced Security on every active private or internal repository.
 
@@ -90,19 +101,25 @@ def transform(input):
     One half alone is reported as partial and does not pass, because the criterion
     asks for code scanning and secret scanning together.
 
-    Fails closed: no private repositories, a repository without security_and_analysis
-    (the token cannot see it), or any uncovered repository.
+    Three outcomes, and they are not interchangeable:
+      * True: every active private or internal repository is covered.
+      * False: at least one repository was READ and is not covered.
+      * None (Not evaluated, with a data collection error): the answer could not be read.
+        That is an error or unrecognised body, an empty list, no private or internal
+        repository in the list (a fine-grained token its organization has not approved
+        sees public repositories only), or a repository whose security_and_analysis block
+        is missing (GitHub returns that block only to an owner, a security manager or a
+        repository admin, so a missing block is a token that cannot see it, not a
+        repository without the feature). A refused or empty read is not a failed control.
     """
     data, validation = extract_input(input)
-
-    if isinstance(data, list):
-        repos = data
-    elif isinstance(data, dict):
-        repos = data.get("data") or data.get("repositories") or []
-        if not isinstance(repos, list):
-            repos = []
-    else:
+    repos = repo_list(data)
+    api_errors = []
+    if repos is None:
         repos = []
+        api_errors.append("The repository list response was not a list of repositories, so Advanced Security cannot be read.")
+    elif not repos:
+        api_errors.append("The repository list response was empty, so Advanced Security cannot be read.")
 
     private_repos = []
     for r in repos:
@@ -138,15 +155,28 @@ def transform(input):
         else:
             uncovered.append(name)
 
-    not_covered = len(code_only) + len(secret_only) + len(uncovered) + len(unknown)
-    is_enabled = total_private > 0 and not_covered == 0
+    known_failing = len(code_only) + len(secret_only) + len(uncovered)
+    if repos and total_private == 0:
+        api_errors.append("No active private or internal repositories were returned, so Advanced Security cannot be read on any.")
+    if unknown and not known_failing:
+        api_errors.append(f"{len(unknown)} of {total_private} private or internal repositories returned no security_and_analysis block, so their Advanced Security state cannot be read.")
+
+    if known_failing:
+        is_enabled = False
+    elif api_errors or unknown:
+        is_enabled = None
+    else:
+        is_enabled = True
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
-    if total_private == 0:
-        fail_reasons.append("No active private or internal repositories were returned, so GitHub Advanced Security cannot be confirmed on any.")
-        recommendations.append("Check that the token can list the organization's private repositories.")
+    if is_enabled is None:
+        fail_reasons.append("Advanced Security could not be read for every active private or internal repository: " + " ".join(api_errors))
+        recommendations.append(
+            "Use a token whose owner is an organization owner or security manager, with access to all repositories, "
+            "and have an owner approve it if the organization requires approval for fine-grained tokens."
+        )
     elif is_enabled:
         pass_reasons.append(
             f"All {total_private} active private/internal repositories have GitHub Advanced Security, or both GitHub Code Security and Secret Protection, enabled (security_and_analysis per repository)."
@@ -189,6 +219,7 @@ def transform(input):
             "uncoveredRepos": uncovered[:20],
             "unknownStatusRepos": unknown[:20],
         },
+        api_errors=api_errors if is_enabled is None else None,
         metadata={
             "transformationId": "isAdvancedSecurityEnabled",
             "vendor": "GitHub",

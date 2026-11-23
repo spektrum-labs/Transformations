@@ -36,12 +36,17 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, missing field, transform raised) and must not be graded.
+    value = result.get("isBackupTypesScheduled") if isinstance(result, dict) else None
+    measured = value is not None
+    not_measured_reasons = api_errors or transformation_errors or fail_reasons or ["isBackupTypesScheduled could not be measured from the response"]
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else not_measured_reasons
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -83,7 +88,7 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
@@ -92,8 +97,37 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        inner_data = data.get("data", data)
-        backupschedules = inner_data.get("rows", [])
+        inner_data = data.get("data", data) if isinstance(data, dict) else None
+        backupschedules = inner_data.get("rows") if isinstance(inner_data, dict) else None
+        if not isinstance(backupschedules, list):
+            # No Resource Graph rows array (empty body, refusal, status stub): nothing measured.
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["isBackupTypesScheduled not evaluated: no Resource Graph 'rows' in the response"],
+                fail_reasons=["isBackupTypesScheduled not evaluated: no Resource Graph 'rows' in the response"]
+            )
+
+        # Zero Resource Graph rows is not a measured answer. Resource Graph is RBAC-scoped:
+        # a scope the caller cannot read at all answers 403, but a PARTIALLY readable scope
+        # answers 200 with only the readable subset and, in Microsoft's words, "without any
+        # indication that the result might be partial". So zero rows is equally "there are
+        # none" and "the vaults are in a subscription this principal cannot read", and the
+        # response carries nothing that tells them apart. See CONTRIBUTING.md, "Azure
+        # Resource Graph: zero rows is not a proven empty set".
+        # A row that came back and reports protectedItemsCount 0 is still a measured False
+        # below: that vault WAS read and it schedules nothing.
+        if not backupschedules:
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["isBackupTypesScheduled not evaluated: the Resource Graph query returned zero "
+                            "rows, which is also what a subscription this principal cannot read returns, "
+                            "so it is not evidence that no backup schedule exists"],
+                recommendations=["Confirm the principal has at least Reader on every subscription holding "
+                                 "a Recovery Services or Backup vault, then re-run the query."],
+                input_summary={"protectedItemsCount": 0}
+            )
 
         scheduled = False
         protected_items_count = 0
@@ -132,7 +166,7 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]

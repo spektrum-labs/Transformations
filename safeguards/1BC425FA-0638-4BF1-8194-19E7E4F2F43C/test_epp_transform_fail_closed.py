@@ -5,6 +5,7 @@ and the critical-systems count was computers-only, so no server could move it. A
 came back as measured False with dataCollection "success". Synthetic bodies only, in the shape of the
 Sophos Endpoint API v1 GET /endpoints reference (field names and enum values verbatim from it).
 """
+import datetime
 import importlib.util
 import json
 import pathlib
@@ -12,7 +13,8 @@ import pathlib
 import pytest
 
 HERE = pathlib.Path(__file__).parent
-SEEN = "2026-10-01T00:00:00.000Z"
+# Relative to now: the transform scores only endpoints seen within 15 days, so a fixed date goes stale.
+SEEN = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
 def load():
@@ -108,6 +110,8 @@ def test_body_cannot_answer_its_own_configured_key():
 NO_EVIDENCE = [
     None, {}, [], "", "{}", {"items": []}, {"items": None}, {"items": "x"},
     {"items": ["not-an-endpoint"]}, {"items": [{"unrelated": 1}]},
+    # one readable endpoint beside junk: the junk would shrink every denominator, so it is not an estate
+    {"items": [endpoint("computer", FULL), "junk"]}, {"items": [endpoint("computer", FULL), {"type": "server"}]},
     {"error": "forbidden", "message": "Access denied", "code": "OAuth:AccessDenied"},
     {"error": True, "errorType": "pagination_incomplete", "status": "Error", "statusCode": 502,
      "message": "Pagination stopped at page 2"},
@@ -150,3 +154,11 @@ def test_unread_page_markers_that_mean_end_of_list_are_not_truncation():
         tr, status = run({"items": [endpoint("computer", FULL)], "pages": pages})
         assert status == "success"
         assert tr["isEPPDeployed"] is True
+
+
+def test_an_estate_of_only_servers_answers_the_same_way_on_every_key():
+    tr, status = run({"items": [endpoint("server", FULL)]})
+    assert status == "success"
+    assert tr["isEPPEnabledForCriticalSystems"] is True
+    assert tr["isEPPEnabled"] is True and tr["isEPPDeployed"] is True
+    assert tr["isEPPConfigured"] is True and tr["isEPPMisconfigured"] is False

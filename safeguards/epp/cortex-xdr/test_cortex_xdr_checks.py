@@ -25,14 +25,14 @@ def counts(enrolled=250, connected=240, offline=10, isolated=1):
 
 FAIL_CLOSED = [{}, None, "{}", "", {"error": True, "statusCode": 401}, {"hello": "world"},
                {"enrolled": {"reply": {}}, "connected": {"reply": {"result_count": 100, "endpoints": [{}] * 100}}}]
-CHECKS = {"isedrdeployed": ("isEDRDeployed", False), "iseppdeployed": ("isEPPDeployed", False),
+CHECKS = {"isedrdeployed": ("isEDRDeployed", None), "iseppdeployed": ("isEPPDeployed", None),
           "offlinesensorcount": ("offlineSensorCount", None), "isolatedendpointcount": ("isolatedEndpointCount", None),
           "requiredcoveragepercentage": ("requiredCoveragePercentage", None)}
 
 
 @pytest.mark.parametrize("body_in", FAIL_CLOSED)
 @pytest.mark.parametrize("name", sorted(CHECKS))
-def test_fail_closed(name, body_in):
+def test_unreadable_is_not_evaluated(name, body_in):
     key, bad = CHECKS[name]
     assert load(name)(body_in)[key] is bad
 
@@ -52,7 +52,7 @@ def test_counts_pass_and_flip():
 
 def test_no_total_count_is_unknown():
     short = {"connected": {"reply": {"result_count": 3, "endpoints": [{}, {}, {}]}}}
-    assert load("isedrdeployed")(short)["isEDRDeployed"] is False
+    assert load("isedrdeployed")(short)["isEDRDeployed"] is None
 
 
 def test_audit_log():
@@ -61,4 +61,4 @@ def test_audit_log():
     assert t({"reply": {"result_count": 1, "data": [{"AUDIT_ID": 1}]}})["isApiAuditLoggingEnabled"] is True
     assert t({"reply": {"total_count": 0, "result_count": 0, "data": []}})["isApiAuditLoggingEnabled"] is False
     for b in [{}, None, "{}", {"error": True}, {"reply": {}}]:
-        assert t(b)["isApiAuditLoggingEnabled"] is False
+        assert t(b)["isApiAuditLoggingEnabled"] is None

@@ -67,6 +67,18 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def devices_in_scope(data):
+    """The device list the workflow put beside the organizations/policies, or None when there is none.
+
+    With the definition's optional organizationFilter set, getDevicesDetailed returns only the devices
+    of the organizations in scope, so this list is what decides which organizations and policies count.
+    Without it (older workflow, or a bare list) the check judges everything it was given, as before.
+    """
+    if isinstance(data, dict) and isinstance(data.get("devices"), list):
+        return [d for d in data["devices"] if isinstance(d, dict)]
+    return None
+
+
 def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
@@ -80,6 +92,14 @@ def transform(input):
     else:
         orgs = []
 
+    devices = devices_in_scope(data)
+    orgs_out_of_scope = 0
+    if devices is not None:
+        org_ids = set([d.get("organizationId") for d in devices])
+        scoped = [o for o in orgs if isinstance(o, dict) and o.get("id") in org_ids]
+        orgs_out_of_scope = len(orgs) - len(scoped)
+        orgs = scoped
+
     total_orgs = len(orgs)
     automatic_orgs = []
     non_automatic_orgs = []
@@ -88,41 +108,41 @@ def transform(input):
         if not isinstance(org, dict):
             continue
         mode = org.get("nodeApprovalMode")
-        name = org.get("name") or f"org-{org.get('id')}"
+        name = org.get("name") or ("org id %s" % org.get("id"))
         if mode == "AUTOMATIC":
             automatic_orgs.append(name)
         else:
             non_automatic_orgs.append((name, mode))
 
+    is_disabled = total_orgs > 0 and len(automatic_orgs) == 0
+
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+
     if total_orgs == 0:
-        is_disabled = False
-        fail_reasons = ["No organizations were returned by getOrganizations; nodeApprovalMode could not be verified for any organization."]
-        pass_reasons = []
-        recommendations = ["Verify the getOrganizations endpoint returns organization records and retry the scan."]
-    elif len(automatic_orgs) == 0:
-        is_disabled = True
-        pass_reasons = [
-            f"All {total_orgs} organization(s) have nodeApprovalMode != AUTOMATIC: "
-            + ", ".join(f"{n}={m}" for n, m in non_automatic_orgs)
-        ]
-        fail_reasons = []
-        recommendations = []
+        fail_reasons.append("No organization records were returned by getOrganizations, so nodeApprovalMode could not be verified for any organization.")
+        recommendations.append("Verify API connectivity and confirm the getOrganizations endpoint returns organization records.")
+    elif is_disabled:
+        modes_summary = ", ".join(["%s=%s" % (n, m) for n, m in non_automatic_orgs]) if non_automatic_orgs else "no organizations configured"
+        pass_reasons.append(
+            "All %d organization(s) have nodeApprovalMode other than AUTOMATIC (%s), meaning new devices require manual technician approval before joining the fleet." % (total_orgs, modes_summary)
+        )
     else:
-        is_disabled = False
-        pass_reasons = []
-        fail_reasons = [
-            f"{len(automatic_orgs)} of {total_orgs} organization(s) have nodeApprovalMode=AUTOMATIC: "
-            + ", ".join(automatic_orgs)
-        ]
-        recommendations = [
-            f"Change nodeApprovalMode from AUTOMATIC to MANUAL (or REJECT) for organization(s): "
-            + ", ".join(automatic_orgs)
-        ]
+        fail_reasons.append(
+            "%d of %d organization(s) have nodeApprovalMode=AUTOMATIC (%s), meaning new devices are auto-approved onto the fleet without technician review." % (
+                len(automatic_orgs), total_orgs, ", ".join(automatic_orgs)
+            )
+        )
+        recommendations.append(
+            "Change nodeApprovalMode to MANUAL (or REJECT) for the following organization(s) so new devices require technician review before joining the fleet: %s." % ", ".join(automatic_orgs)
+        )
 
     result = {
         "isDeviceAutoApprovalDisabled": is_disabled,
         "totalOrganizations": total_orgs,
-        "automaticApprovalOrgCount": len(automatic_orgs),
+        "automaticApprovalOrganizations": automatic_orgs,
+        "organizationsOutOfScope": orgs_out_of_scope,
     }
 
     return create_response(
@@ -131,10 +151,7 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={
-            "totalOrganizations": total_orgs,
-            "automaticApprovalOrgCount": len(automatic_orgs),
-        },
+        input_summary={"totalOrganizations": total_orgs, "automaticCount": len(automatic_orgs)},
         metadata={
             "transformationId": "isDeviceAutoApprovalDisabled",
             "vendor": "NinjaOne Endpoint Management",

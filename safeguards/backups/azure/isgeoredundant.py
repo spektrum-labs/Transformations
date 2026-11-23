@@ -40,12 +40,17 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
 
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, missing field, transform raised) and must not be graded.
+    value = result.get("isGeoRedundant") if isinstance(result, dict) else None
+    measured = value is not None
+    not_measured_reasons = api_errors or transformation_errors or fail_reasons or ["isGeoRedundant could not be measured from the response"]
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else not_measured_reasons
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -110,11 +115,12 @@ def evaluate(data):
             vaults = []
 
         if not vaults:
-            return {"isGeoRedundant": False, "error": "No vaults found"}
+            return {"isGeoRedundant": None, "error": "No vaults found"}
 
         all_geo = True
         non_geo_vaults = []
         storage_types = []
+        vaults_with_storage_type = 0
 
         for vault in vaults:
             if not isinstance(vault, dict):
@@ -122,9 +128,16 @@ def evaluate(data):
             vault_name = vault.get("name", "Unknown")
             effective_type = check_vault_geo_redundancy(vault)
             storage_types.append(effective_type)
+            if effective_type:
+                vaults_with_storage_type += 1
             if "georedundant" not in effective_type.lower():
                 all_geo = False
                 non_geo_vaults.append(vault_name)
+
+        if vaults_with_storage_type == 0:
+            # No vault carried a storage redundancy field (empty body, refusal envelope,
+            # status stub): nothing about geo-redundancy was measured.
+            return {"isGeoRedundant": None, "error": "No vault storage redundancy setting in the response"}
 
         return {
             "isGeoRedundant": all_geo and len(vaults) > 0,
@@ -133,7 +146,7 @@ def evaluate(data):
             "nonGeoRedundantVaults": non_geo_vaults
         }
     except Exception as e:
-        return {"isGeoRedundant": False, "error": str(e)}
+        return {"isGeoRedundant": None, "error": str(e)}
 
 
 def transform(input):
@@ -148,14 +161,16 @@ def transform(input):
         data, validation = extract_input(input)
 
         eval_result = evaluate(data)
-        result_value = eval_result.get(criteriaKey, False)
+        result_value = eval_result.get(criteriaKey)
         extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
 
-        if result_value:
+        if result_value is None:
+            fail_reasons.append(f"{criteriaKey} not evaluated: {eval_result.get('error', 'no vault data')}")
+        elif result_value:
             pass_reasons.append(f"{criteriaKey} check passed")
             for k, v in extra_fields.items():
                 pass_reasons.append(f"{k}: {v}")
@@ -175,7 +190,7 @@ def transform(input):
         )
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]

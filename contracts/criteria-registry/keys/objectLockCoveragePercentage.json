@@ -1,0 +1,40 @@
+{
+  "name": "objectLockCoveragePercentage",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Percentage of the account's private buckets that have Object Lock (WORM) enabled, rounded down.",
+  "valueType": "integer",
+  "unit": "percent",
+  "population": "the private buckets the backup storage account lists",
+  "polarity": "higher_is_better",
+  "evidenceRequiredForTrue": "Not applicable: a percentage. A value is reported only when every private bucket's lock setting was readable.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "backup"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/backups/backblaze-b2/objectlockcoveragepercentage.py",
+    "Backblaze B2 native API reference, b2_list_buckets: https://www.backblaze.com/apidocs/b2-list-buckets"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-29",
+      "change": "Registered with the Backblaze B2 transforms, its first implementation."
+    }
+  ],
+  "notes": "Backblaze B2: fileLockConfiguration.value.isFileLockEnabled over allPrivate and snapshot buckets."
+}

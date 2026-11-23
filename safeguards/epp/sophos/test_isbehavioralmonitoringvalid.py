@@ -188,3 +188,26 @@ def test_endpoint_inventory_that_passed_the_old_transform_now_fails():
                                        "services": {"status": "bad"}}}],
                  "pages": {"fromKey": None, "nextKey": None, "size": 50, "maxSize": 500}}
     assert run(endpoints)[0] is False
+
+
+def test_transform_crash_is_reported_on_the_channel_the_evaluator_reads(monkeypatch):
+    """An unexpected exception must read Not evaluated, not a measured answer.
+
+    The evaluator reads additionalInfo.dataCollection.status only, which create_response
+    derives from api_errors. Reporting the crash under transformation alone left it "success".
+    """
+    def boom(_data):
+        raise RuntimeError("synthetic crash")
+
+    monkeypatch.setattr(MOD, "policy_items", boom)
+    out = MOD.transform(GOOD)
+    info = out["additionalInfo"]
+    assert out["transformedResponse"][KEY] is False
+    assert info["dataCollection"]["status"] == "error"
+    assert info["dataCollection"]["errors"] == ["Transformation error: synthetic crash"]
+    assert info["transformation"]["status"] == "error"
+    assert info["transformation"]["errors"] == ["synthetic crash"]
+
+
+def test_a_clean_run_still_reports_data_collection_success():
+    assert run(GOOD)[1]["additionalInfo"]["dataCollection"]["status"] == "success"

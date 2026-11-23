@@ -1,0 +1,39 @@
+{
+  "name": "unresolvedRootCauseVulnerabilitiesCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of open NodeZero weakness series whose vuln_category is a systemic root-cause category (for example security misconfiguration) rather than a one-off CVE patch.",
+  "valueType": "integer",
+  "unit": "count",
+  "population": "Weakness series in the weakness series page for one NodeZero tenant whose status is not closed, counted when vuln_category is one of the transform's ROOT_CAUSE_CATEGORIES.",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "For 0: the page holds at least one series, and no open series falls in a root-cause category. An empty page is not 0.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Threat & Vulnerability Management"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/threat-vulnerability-management/horizon3-nodezero/unresolvedRootCauseVulnerabilitiesCount.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-17",
+      "change": "Registered so the Horizon3 NodeZero transforms can emit it; the meaning is what the transform reads, stated precisely. Unverified fields are named in notes."
+    }
+  ],
+  "notes": "Only the NodeZero transform emits this key today. Field names are as that transform reads them; they were not live-verified against a NodeZero tenant, so the key stays proposed at V0 with the owner not yet named. The category list is the transform's own judgement of which categories are systemic; it is not a NodeZero-published taxonomy."
+}

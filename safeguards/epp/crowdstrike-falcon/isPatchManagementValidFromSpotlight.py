@@ -33,7 +33,7 @@ Missing scope (SCOPE-NOT-GRANTED): CrowdStrike answers a client without "Vulnera
 {"errors": [{"code": 403, "message": "access denied, scope not permitted"}]}. When the method opts in to
 Integration-Service's vendorErrorAsResponse for that 403, IS hands it over as
 {"vendorErrorAsResponse": {"status": 403, "bodyContains": ..., "body": <the vendor body>}}. That refusal says
-nothing about the estate: all keys stay None (Unevaluated) and dataCollection carries errorCode
+nothing about the environment: all keys stay None (Unevaluated) and dataCollection carries errorCode
 "scope_not_granted" and requiredScope "Vulnerabilities: Read", so the check reads "needs the scope", not as a
 finding or a defect. Any other handed-over refusal is Unevaluated with errorCode "vendor_refusal".
 

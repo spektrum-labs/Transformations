@@ -1,4 +1,31 @@
-import json
+"""
+Transformation: isAttachmentSandboxDetonationEnabled
+Vendor: Check Point Harmony Email & Collaboration (Check Point Email Security)
+Method: queryEvents (security events)
+
+NOT MEASURABLE FROM THIS DATA: the criterion is always None (Not evaluated), never True and never
+False.
+
+This check used to read True when any security event mentioned "sandbox", "emulat", "threatcloud",
+"detonat" or "zero-day" in a free-text field, and False when no such event existed. A keyword in a
+description does not measure a setting: it passed for a tenant whose attachment sandboxing (Threat
+Emulation) was off, and it failed a tenant that simply had no events yet.
+
+What the public Check Point Email Security API exposes (API Reference Guide, "Get the Details of a
+Specific Entity" and "Search for Secured Entities"): entitySecurityResults and combinedVerdict carry
+the scan results of five engines only, ap, dlp, clicktimeProtection, shadowIt and av. There is no
+threat-emulation or sandbox result, no policy or security-engine endpoint and no licence endpoint.
+The Anti-Malware engine bundles Anti-Virus with Threat Emulation, and whether a tenant has Threat
+Emulation or Anti-Virus alone is visible only in the admin console (Security Settings, Security
+Engines, Anti-Malware). Security events exist only after a detection. So an event list, empty or
+not, cannot show whether attachments are sandboxed, and the av verdict (isAntivirusVerdictEngineEnabled
+in checkpoint-harmony-email) cannot tell Anti-Virus alone from Anti-Virus plus Threat Emulation.
+
+Each tool measures for that tool. A Check Point row for attachment sandboxing appears only when the
+API exposes a real field. Until then this check reports Not evaluated: the criterion is None and
+dataCollection.status is "error", which the evaluator shows as Not evaluated and which opens no gap.
+The reason text is fixed; the vendor's own error text is never copied into it.
+"""
 from datetime import datetime
 
 
@@ -9,7 +36,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for attempt in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -67,121 +94,75 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-SANDBOX_KEYWORDS = [
-    "sandbox",
-    "detonat",
-    "emulat",
-    "threatcloud",
-    "zero-day",
-    "zero day",
-]
+KEY = "isAttachmentSandboxDetonationEnabled"
 
-MALWARE_TYPES = ["malware", "attachment", "threat_emulation", "threatemulation"]
+READ_FAILED = (
+    "The Check Point security-event read returned an error, an empty body or a shape that is not "
+    "an event list, so nothing was read; nothing to measure."
+)
+
+NOT_EXPOSED = (
+    "Check Point's Email Security API does not expose whether attachment sandboxing (Threat "
+    "Emulation) is on: scan results cover only the ap, dlp, clicktimeProtection, shadowIt and av "
+    "engines, and there is no policy, security-engine or licence endpoint. A security event that "
+    "mentions a sandbox, or an empty event list, does not show the setting; nothing to measure."
+)
 
 
-def transform(input):
-    data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
-
-    api_errors = []
-    if data.get("error") or data.get("errorType") == "authentication" or data.get("statusCode") == 401:
-        api_errors.append(str(data.get("errorMessage") or data.get("message") or "API error"))
-
-    events = data.get("responseData") or []
-    if not isinstance(events, list):
-        events = []
-
-    total_events = len(events)
-    detonation_events = []
-
-    for ev in events:
-        if not isinstance(ev, dict):
-            continue
-        ev_type = str(ev.get("type") or "").lower()
-        description = str(ev.get("description") or "").lower()
-        add_data = ev.get("additionalData")
-        add_data_str = json.dumps(add_data).lower() if add_data else ""
-        ev_data = ev.get("data")
-        ev_data_str = json.dumps(ev_data).lower() if ev_data else ""
-
-        haystack = ev_type + " " + description + " " + add_data_str + " " + ev_data_str
-
-        is_malware_type = False
-        for mt in MALWARE_TYPES:
-            if mt in ev_type:
-                is_malware_type = True
-                break
-
-        has_sandbox_keyword = False
-        for kw in SANDBOX_KEYWORDS:
-            if kw in haystack:
-                has_sandbox_keyword = True
-                break
-
-        if is_malware_type and has_sandbox_keyword:
-            detonation_events.append(ev)
-        elif has_sandbox_keyword:
-            detonation_events.append(ev)
-
-    enabled = len(detonation_events) > 0
-
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
-
-    if api_errors:
-        fail_reasons.append(
-            "Unable to confirm attachment sandbox detonation: API returned an error (%s) instead of event data." % "; ".join(api_errors)
-        )
-        recommendations.append(
-            "Verify Check Point Harmony Email API credentials (clientId/accessKey) and re-run the event query to retrieve malware/attachment detonation events."
-        )
-        enabled = False
-    elif total_events == 0:
-        fail_reasons.append(
-            "queryEvents returned zero events in responseData, so no sandbox detonation verdicts (e.g. malware/attachment type events referencing ThreatCloud, sandbox, or detonation) could be observed."
-        )
-        recommendations.append(
-            "Confirm attachment sandboxing (Threat Emulation) is enabled in the Harmony Email policy, then re-run once qualifying events exist."
-        )
-    elif enabled:
-        sample = detonation_events[0]
-        pass_reasons.append(
-            "Found %d of %d queried events with malware/attachment type and sandbox/detonation indicators (e.g. eventId=%s, type=%s, description snippet=%s), confirming attachments are routed through ThreatCloud sandbox detonation before delivery."
-            % (
-                len(detonation_events),
-                total_events,
-                str(sample.get("eventId")),
-                str(sample.get("type")),
-                str(sample.get("description"))[:120],
-            )
-        )
-    else:
-        fail_reasons.append(
-            "Queried %d events but none contained malware/attachment type or sandbox/detonation/ThreatCloud keywords in type, description, data, or additionalData fields."
-            % total_events
-        )
-        recommendations.append(
-            "Enable Threat Emulation (sandboxing) for attachments in the Harmony Email Collaboration policy so detonation verdicts are generated and queryable."
-        )
-
-    result = {
-        "isAttachmentSandboxDetonationEnabled": bool(enabled),
-        "totalEventsQueried": total_events,
-        "detonationEventCount": len(detonation_events),
-    }
-
+def not_measured(reason, validation, extra_result=None, input_summary=None, transformation_errors=None):
+    """No verdict: the criterion is None and dataCollection.status is error, so the evaluator shows
+    Not evaluated instead of a failed check. extra_result carries a fact that was really read (the
+    number of events) next to the missing verdict."""
+    result = {KEY: None}
+    if extra_result:
+        result.update(extra_result)
     return create_response(
         result=result,
         validation=validation,
-        pass_reasons=pass_reasons,
-        fail_reasons=fail_reasons,
-        recommendations=recommendations,
-        input_summary={"totalEvents": total_events, "detonationEvents": len(detonation_events)},
+        fail_reasons=[reason],
+        input_summary=input_summary,
+        transformation_errors=transformation_errors,
+        api_errors=[reason],
         metadata={
-            "transformationId": "isAttachmentSandboxDetonationEnabled",
+            "transformationId": KEY,
             "vendor": "Check Point Software Technologies Email Security",
             "category": "emailsecurity",
         },
-        api_errors=api_errors,
     )
+
+
+def read_failed(data):
+    """True when the body is an error, an authentication failure or not an event list."""
+    if not isinstance(data, dict):
+        return True
+    if data.get("error") or data.get("errorType") == "authentication" or data.get("statusCode") == 401:
+        return True
+    if data.get("statusCode") == 403 or data.get("status_code") in (401, 403):
+        return True
+    envelope = data.get("responseEnvelope")
+    if isinstance(envelope, dict):
+        code = envelope.get("responseCode")
+        if code is not None and str(code) not in ("0", "200"):
+            return True
+    return not isinstance(data.get("responseData"), list)
+
+
+def transform(input):
+    try:
+        data, validation = extract_input(input)
+        if read_failed(data):
+            return not_measured(READ_FAILED + " " + NOT_EXPOSED, validation)
+        events = [ev for ev in data.get("responseData") if isinstance(ev, dict)]
+        total_events = len(events)
+        return not_measured(
+            NOT_EXPOSED,
+            validation,
+            extra_result={"totalEventsQueried": total_events},
+            input_summary={"totalEvents": total_events},
+        )
+    except Exception:
+        return not_measured(
+            READ_FAILED + " " + NOT_EXPOSED,
+            None,
+            transformation_errors=["The transformation could not read the body."],
+        )

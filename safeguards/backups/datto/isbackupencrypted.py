@@ -66,144 +66,162 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+ERROR_KEYS = ("error", "errors", "errorMessage", "errorType", "fault")
+ASSET_KEYS = ("backups", "lastSnapshot", "agentVersion", "isPaused", "isArchived", "protectedVolumesCount",
+              "lastScreenshotAttempt", "localSnapshots")
+
+
+def error_text(obj):
+    """A vendor or transport error carried by a dict, or None."""
+    if not isinstance(obj, dict):
+        return None
+    for key in ERROR_KEYS:
+        if obj.get(key):
+            return str(key) + ": " + json.dumps(obj.get(key))[:200]
+    code = obj.get("statusCode", obj.get("status_code", obj.get("code")))
+    if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+        return "HTTP " + str(code) + ": " + str(obj.get("message") or obj.get("detail") or "")[:200]
+    return None
+
+
+def looks_like_asset(obj):
+    if not isinstance(obj, dict):
+        return False
+    for key in ASSET_KEYS:
+        if key in obj:
+            return True
+    return False
+
+
+def collect_assets(data):
+    """Return (active_assets, device_count, None) for a readable Datto BCDR asset read, or (None, 0, problem).
+
+    The e0d463e8 workflow calls GET /v1/bcdr/device, then GET /v1/bcdr/device/{serial}/asset per device,
+    and hands over {"devices": [<asset list for device 1>, <asset list for device 2>, ...]}. A bare asset
+    list, a single device's {"items": [...]} and a {"devices": [...]} of asset objects are read the same way.
+    Anything that is not positive evidence of at least one protected asset is NOT a measurement: None, {},
+    an error envelope, an empty device list or an empty asset list all return a problem, never an answer.
+    """
+    if data is None:
+        return None, 0, "Datto returned no body; nothing was measured."
+    problem = error_text(data)
+    if problem:
+        return None, 0, "Datto returned an error, so nothing was measured (" + problem + ")."
+    if isinstance(data, dict):
+        groups = data.get("devices")
+        if groups is None:
+            groups = data.get("items")
+        if groups is None and looks_like_asset(data):
+            groups = [data]
+    elif isinstance(data, list):
+        groups = data
+    else:
+        groups = None
+    if not isinstance(groups, list):
+        return None, 0, "Datto response has no device or asset list; nothing was measured."
+    assets = []
+    device_count = 0
+    for group in groups:
+        if isinstance(group, dict) and isinstance(group.get("items"), list):
+            group = group.get("items")
+        if isinstance(group, list):
+            found = False
+            for item in group:
+                problem = error_text(item)
+                if problem:
+                    return None, 0, "Datto returned an error for a device, so the read is incomplete (" + problem + ")."
+                if looks_like_asset(item):
+                    assets.append(item)
+                    found = True
+            if found:
+                device_count += 1
+        elif isinstance(group, dict):
+            problem = error_text(group)
+            if problem:
+                return None, 0, "Datto returned an error for a device, so the read is incomplete (" + problem + ")."
+            if looks_like_asset(group):
+                assets.append(group)
+                device_count += 1
+    if not assets:
+        return None, 0, "Datto returned no protected assets (empty device or asset list); nothing was measured."
+    active = [a for a in assets if a.get("isArchived") is not True]
+    if not active:
+        return None, device_count, "Every Datto asset returned is archived; there is no active asset to measure."
+    return active, device_count, None
+
+
+def percentage(part, whole):
+    return round(100.0 * part / whole, 1) if whole else None
+
+
+def not_measured(criteriaKey, validation, problem):
+    return create_response(
+        result={criteriaKey: None},
+        validation=validation,
+        fail_reasons=[problem],
+        api_errors=[problem],
+        input_summary={"measured": False},
+    )
+
+
+def load_input(input):
+    if isinstance(input, bytes):
+        input = input.decode("utf-8")
+    if isinstance(input, str):
+        input = json.loads(input)
+    return extract_input(input)
+
+
+def number(value):
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+
+
 def transform(input):
     criteriaKey = "isBackupEncrypted"
-
     try:
-        if isinstance(input, str):
-            input = json.loads(input)
-        elif isinstance(input, bytes):
-            input = json.loads(input.decode("utf-8"))
-
-        data, validation = extract_input(input)
-
+        data, validation = load_input(input)
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
-
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        # Check for encryption status
-        devices = (
-            data.get("items", []) or
-            data.get("devices", []) or
-            data.get("agents", []) or
-            data.get("data", {}).get("rows", [])
-        ) if isinstance(data, dict) else []
-
-        # A NON-DICT BODY REACHES NO GUARD BELOW. `all_encrypted` is initialised True, and
-        # when `data` is not a dict the device loop does not run AND the global-setting
-        # branch is skipped (it is itself guarded by isinstance(data, dict)) -- so the
-        # optimistic initial value survived untouched all the way to the verdict. That is
-        # how transform(None) reported "All Datto BCDR backups are encrypted (AES-256)".
-        if not isinstance(data, dict):
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=[
-                    "Datto returned nothing this transform could read (the body was "
-                    "absent or not an object), so encryption was not verified for this "
-                    "estate. Datto BCDR does encrypt by default, but that is a product "
-                    "fact and not a reading of this customer's devices."
-                ],
-                recommendations=[
-                    "Confirm the Datto credential is valid and the device list call "
-                    "returned a 2xx body before reading this criterion."
-                ],
-                input_summary={"bodyReadable": False},
-            )
-
-        # Datto BCDR uses AES-256 encryption by default
-        all_encrypted = True
-        has_devices = False
-        encrypted_count = 0
-
-        for device in devices:
-            if isinstance(device, list):
-                device = device[0] if len(device) > 0 else {}
-
-            has_devices = True
-            encryption = device.get("encryption", device.get("encryptionStatus", {}))
-
-            if isinstance(encryption, bool):
-                is_encrypted = encryption
-            elif isinstance(encryption, dict):
-                is_encrypted = encryption.get("enabled", True) or encryption.get("encrypted", True)
-            else:
-                # Datto BCDR encrypts by default, so assume True if not explicitly False
-                is_encrypted = str(encryption).lower() not in ["false", "disabled", "none"]
-
-            if is_encrypted:
-                encrypted_count += 1
-            else:
-                all_encrypted = False
-
-        # If no devices, check global encryption setting
-        if not has_devices and isinstance(data, dict):
-            # A BODY THAT NAMED NEITHER A DEVICE NOR A SETTING IS NOT A READING OF THIS
-            # ESTATE. With no devices, this used to fall through to
-            # data.get("encryptionEnabled", data.get("encryption", True)) -- a default of
-            # True -- so {}, an error envelope and an unparsed body all reported "All
-            # Datto BCDR backups are encrypted (AES-256)". Measured 2026-09-21:
-            # transform(None) returned isBackupEncrypted true. Datto does encrypt by
-            # default, and that supports "devices were listed and none had encryption
-            # off"; it says nothing about a call that returned no devices and no setting.
-            error_keys = ("error", "errors", "errorMessage", "errorType", "fault")
-            looks_like_error = any(data.get(k) for k in error_keys)
-            try:
-                status = int(data.get("statusCode") or data.get("status_code") or 0)
-            except (TypeError, ValueError):
-                status = 0
-            has_global = ("encryptionEnabled" in data) or ("encryption" in data)
-            if not data or looks_like_error or status >= 400 or not has_global:
-                return create_response(
-                    result={criteriaKey: False},
-                    validation=validation,
-                    fail_reasons=[
-                        "Datto returned no devices and no global encryption setting "
-                        "(empty body, an error response, or an unrecognised shape), so "
-                        "encryption was not verified for this estate. Datto BCDR does "
-                        "encrypt by default, but that is a product fact and not a reading "
-                        "of this customer's devices."
-                    ],
-                    recommendations=[
-                        "Confirm the Datto credential is valid and the device list call "
-                        "returned a 2xx before reading this criterion."
-                    ],
-                    input_summary={"devicesReturned": 0, "globalSettingPresent": False},
-                )
-            global_encryption = data.get("encryptionEnabled", data.get("encryption", True))
-            all_encrypted = bool(global_encryption)
-
+            return not_measured(criteriaKey, validation,
+                                "Input validation failed: " + json.dumps(validation.get("errors"))[:200])
+        assets, device_count, problem = collect_assets(data)
+        if problem:
+            return not_measured(criteriaKey, validation, problem)
+        total = len(assets)
+        off_words = ("false", "disabled", "off", "none", "unencrypted")
+        off = []
+        for a in assets:
+            for k in ("encryption", "encrypted", "isEncrypted", "encryptionEnabled"):
+                if k not in a:
+                    continue
+                v = a.get(k)
+                if isinstance(v, dict):
+                    v = v.get("enabled", v.get("encrypted"))
+                if v is False or (isinstance(v, str) and v.strip().lower() in off_words):
+                    off.append(a)
+                    break
+        pct = percentage(total - len(off), total)
+        all_encrypted = len(off) == 0
+        pass_reasons, fail_reasons, recommendations = [], [], []
         if all_encrypted:
-            pass_reasons.append("All Datto BCDR backups are encrypted (AES-256)")
-            if encrypted_count > 0:
-                pass_reasons.append(f"{encrypted_count} devices with encryption verified")
+            pass_reasons.append(str(total) + " active Datto assets were read and none reports encryption off "
+                                "(Datto BCDR encrypts backups by default)")
         else:
-            fail_reasons.append("Not all Datto BCDR devices have encryption enabled")
-            recommendations.append("Verify encryption settings for all Datto BCDR devices")
-
+            fail_reasons.append(str(len(off)) + " of " + str(total) + " active Datto assets report encryption off")
+            recommendations.append("Enable encryption for every Datto agent")
         return create_response(
-            result={criteriaKey: all_encrypted},
-            validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
+            result={criteriaKey: all_encrypted, "backupEncryptedPercentage": pct},
+            validation=validation, pass_reasons=pass_reasons, fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={
-                "totalDevices": len(devices) if has_devices else 0,
-                "encryptedDevices": encrypted_count
-            }
+            input_summary={"devices": device_count, "activeAssets": total, "assetsReportingEncryptionOff": len(off),
+                           "backupEncryptedPercentage": pct},
         )
 
     except Exception as e:
+        problem = "Transformation error: " + str(e)
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=[problem],
+            api_errors=[problem],
         )
