@@ -1,197 +1,68 @@
 """
 Transformation: isPatchManagementEnabled
-Vendor: Endpoint Protection Platform
-Category: Endpoint Security / Patch Management
+Vendor: Arctic Wolf - EDR Endpoint Security (Aurora Endpoint Defense API)
+Category: Patch Management
 
-Evaluates if patch management is enabled and valid.
+NOT MEASURED. Every key below returns None with a dataCollection error, so it reads Unevaluated
+-- never Passed, never Failed.
+
+Not measurable from the vendor API: the requirement is document-only (L2) for this
+integration. Aurora Endpoint Security is endpoint protection. No Aurora Endpoint Defense API
+resource (User, Device, Global list, Policy, Zone, Threat, Memory protection, Detections,
+Package deployment, Device commands, Lockdown configurations) reports operating-system or
+application patch state or a patching policy.
+
+The Arctic Wolf - EDR Endpoint Security definition routes these keys to the
+`checkInstalled` method, which has no request defined in that definition (no url, no HTTP
+method), so no vendor body ever reaches this file.
+
+What this file did before:
+`data.get('isPatchManagementEnabled', affirmative_signal(data))` and the same for
+isPatchManagementValid -- fields no Arctic Wolf API sends.
+
+Docs: Aurora Endpoint Defense API, https://docs.arcticwolf.com/en/developer-and-oem/aurora-endpoint-defense-api
+(retrieved 2026-10-07).
 """
 
-import json
 from datetime import datetime
 
+KEYS = ("isPatchManagementEnabled", "isPatchManagementValid")
 
-def extract_input(input_data):
-    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-        return input_data["data"], input_data["validation"]
-    data = input_data
-    if isinstance(data, dict):
-        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
-            unwrapped = False
-            for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
-                    data = data[key]
-                    unwrapped = True
-                    break
-            if not unwrapped:
-                break
-    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+REASON = ("Not measured: Arctic Wolf Aurora is endpoint protection and its API reports no patch "
+          "management state, so this is document-only evidence for this integration")
 
 
-def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
-    if validation is None:
-        validation = {"status": "unknown", "errors": [], "warnings": []}
+def create_response(result, api_errors, input_summary=None):
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
+                "status": "error" if api_errors else "success",
                 "errors": api_errors or []
             },
-            "validation": {
-                "status": validation.get("status", "unknown"),
-                "errors": validation.get("errors", []),
-                "warnings": validation.get("warnings", [])
-            },
-            "transformation": {
-                "status": "error" if (transformation_errors or []) else "success",
-                "errors": transformation_errors or [],
-                "inputSummary": input_summary or {}
-            },
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": input_summary or {}},
             "evaluation": {
-                "passReasons": pass_reasons or [],
-                "failReasons": fail_reasons or [],
-                "recommendations": recommendations or [],
-                "additionalFindings": additional_findings or []
+                "passReasons": [],
+                "failReasons": api_errors or [],
+                "recommendations": [],
+                "additionalFindings": []
             },
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "isPatchManagementEnabled",
-                "vendor": "Endpoint Protection Platform",
-                "category": "Endpoint Security"
+                "vendor": "Arctic Wolf",
+                "category": "Patch Management"
             }
         }
     }
 
 
 def transform(input):
-    try:
-        if isinstance(input, str):
-            input = json.loads(input)
-        elif isinstance(input, bytes):
-            input = json.loads(input.decode("utf-8"))
-
-        data, validation = extract_input(input)
-
-        if validation.get("status") == "failed":
-            return create_response(
-                result={"isPatchManagementEnabled": False, "isPatchManagementValid": False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
-
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        # `data is not None` asked whether a RESPONSE ARRIVED, not what it said, so any
-        # 2xx body -- including one describing the control as OFF -- satisfied this
-        # criterion and no input could make it false. Resolved from the payload now.
-        default_value = affirmative_signal(data)
-
-        is_patch_management_enabled = False
-        is_patch_management_valid = False
-
-        if isinstance(data, dict):
-            is_patch_management_enabled = data.get('isPatchManagementEnabled', default_value)
-            is_patch_management_valid = data.get('isPatchManagementValid', default_value)
-        else:
-            is_patch_management_enabled = default_value
-            is_patch_management_valid = default_value
-
-        additional_findings = []
-
-        # Primary criteria: isPatchManagementEnabled
-        if is_patch_management_enabled:
-            pass_reasons.append("Patch management is enabled")
-        else:
-            fail_reasons.append("Patch management is not enabled")
-            recommendations.append("Enable patch management for endpoint security")
-
-        # Additional finding: isPatchManagementValid
-        if is_patch_management_valid:
-            additional_findings.append({
-                "metric": "isPatchManagementValid",
-                "status": "pass",
-                "reason": "Patch management configuration is valid"
-            })
-        else:
-            additional_findings.append({
-                "metric": "isPatchManagementValid",
-                "status": "fail",
-                "reason": "Patch management configuration is not valid",
-                "recommendation": "Review and correct patch management configuration"
-            })
-
-        return create_response(
-            result={
-                "isPatchManagementEnabled": is_patch_management_enabled,
-                "isPatchManagementValid": is_patch_management_valid
-            },
-            validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            additional_findings=additional_findings,
-            input_summary={
-                "patchManagementEnabled": is_patch_management_enabled,
-                "patchManagementValid": is_patch_management_valid
-            }
-        )
-
-    except Exception as e:
-        return create_response(
-            result={"isPatchManagementEnabled": False, "isPatchManagementValid": False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
-
-
-def affirmative_signal(data):
-    """True only when the payload POSITIVELY evidences the control.
-
-    Replaces `data is not None`, which asked whether a response arrived rather than what
-    it said -- so any 2xx body, including one describing the control as OFF, satisfied the
-    criterion and no input could ever make it false. Measured 2026-09-21.
-
-    Deliberately conservative, in this order:
-      * an unreadable, empty or error body           -> False
-      * an explicit OFF among the recognised keys    -> False   (beats any other signal)
-      * an explicit ON among the recognised keys     -> True
-      * a non-empty population of records/settings   -> True
-      * anything unrecognised                        -> False  (never True by default)
-    """
-    if not isinstance(data, dict) or not data:
-        return False
-    for key in ("error", "errors", "errorMessage", "errorType", "fault", "PSError"):
-        if data.get(key):
-            return False
-    on_keys = ("enabled", "isEnabled", "active", "isActive", "configured", "isConfigured",
-               "enforced", "isEnforced", "loggingEnabled", "status", "state", "licensed",
-               "licensePurchased", "subscribed", "subscription")
-    present = [data[k] for k in on_keys if k in data]
-    off_words = ("false", "disabled", "off", "inactive", "none", "expired", "cancelled")
-    on_words = ("true", "enabled", "on", "active", "success", "ok", "valid", "licensed")
-    for value in present:
-        if value is False:
-            return False
-        if isinstance(value, str) and value.strip().lower() in off_words:
-            return False
-    for value in present:
-        if value is True:
-            return True
-        if isinstance(value, str) and value.strip().lower() in on_words:
-            return True
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
-            return True
-    for key in ("value", "items", "data", "records", "results", "logs", "events", "policies",
-                "settings", "configurations", "devices", "agents", "users", "licenses"):
-        value = data.get(key)
-        if isinstance(value, list) and value:
-            return True
-        if isinstance(value, dict) and value:
-            return True
-    return False
+    # No body can change this answer, so the body is not read: a value that is always None
+    # carries its error status with it, on every path including a body whose reads raise.
+    result = {}
+    for key in KEYS:
+        result[key] = None
+    return create_response(result, [REASON])
