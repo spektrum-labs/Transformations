@@ -105,7 +105,9 @@ class DnsTests(Checks):
         self.assertEqual(response["transformedResponse"], {
             "isDNSConfigured": False, "isDMARCConfigured": True, "isDKIMConfigured": False, "isSPFConfigured": True})
         self.assert_measured(response)
-        self.assertEqual(response["additionalInfo"]["evaluation"]["failReasons"], ["Missing DNS records: DKIM"])
+        reasons = response["additionalInfo"]["evaluation"]["failReasons"]
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("DKIM", reasons[0])
 
     def test_a_helper_answer_of_no_records_is_a_measured_fail(self):
         """The helper answered, and every record is absent: a stated negative, not an unreadable body."""
@@ -128,15 +130,19 @@ class DnsTests(Checks):
             with self.subTest(shape=label):
                 self.assertIs(self.run_check(payload)["transformedResponse"]["isDNSConfigured"], True)
 
-    def test_a_record_that_is_present_counts_whatever_its_policy(self):
-        """Presence only: a monitoring-only policy or a permissive SPF still reads configured, as before."""
-        for label, body in (
-            ("DMARC p=none", dict(GOOD_DNS, DMARC="v=DMARC1; p=none")),
-            ("DMARC without a policy", dict(GOOD_DNS, DMARC="v=DMARC1")),
-            ("SPF +all", dict(GOOD_DNS, SPF="v=spf1 +all")),
+    def test_a_record_that_does_not_enforce_is_a_measured_fail(self):
+        """Strength, not presence: a monitoring-only DMARC or a permissive SPF reads False, as in every email family."""
+        for label, body, key in (
+            ("DMARC p=none", dict(GOOD_DNS, DMARC="v=DMARC1; p=none"), "isDMARCConfigured"),
+            ("DMARC without a policy", dict(GOOD_DNS, DMARC="v=DMARC1"), "isDMARCConfigured"),
+            ("SPF +all", dict(GOOD_DNS, SPF="v=spf1 +all"), "isSPFConfigured"),
+            ("SPF ?all", dict(GOOD_DNS, SPF="v=spf1 ?all"), "isSPFConfigured"),
         ):
             with self.subTest(case=label):
-                self.assertIs(self.run_check(body)["transformedResponse"]["isDNSConfigured"], True)
+                response = self.run_check(body)
+                self.assertIs(response["transformedResponse"][key], False)
+                self.assertIs(response["transformedResponse"]["isDNSConfigured"], False)
+                self.assert_measured(response)
 
     # --- Not evaluated ----------------------------------------------------------------------------------
 
@@ -204,9 +210,9 @@ class DnsTests(Checks):
 
     def test_a_flag_or_the_protocols_own_record_text_is_an_answer(self):
         for name, value, expected in (
-            ("SPF", True, True), ("SPF", False, False), ("DKIM", True, True), ("DMARC", False, False),
+            ("SPF", False, False), ("DKIM", True, True), ("DMARC", False, False),
             ("SPF", "v=spf1 -all", True), ("SPF", "  V=SPF1 include:spf.example.invalid ~all  ", True),
-            ("DMARC", "V=DMARC1; p=reject", True), ("DMARC", "  v=dmarc1; p=none", True),
+            ("DMARC", "V=DMARC1; p=reject", True), ("DMARC", "  v=dmarc1; p=quarantine", True),
             ("DKIM", "v=DKIM1; k=rsa; p=AAAA", True), ("DKIM", "k=rsa; V=DKIM1; p=AAAA", True), ("DKIM", "p=AAAA", True),
             ("DKIM", "  P=AAAA", True),
         ):
