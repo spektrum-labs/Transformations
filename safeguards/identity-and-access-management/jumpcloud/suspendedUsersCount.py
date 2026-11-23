@@ -96,7 +96,7 @@ def transform_evidence(input):
 
     sample_names = []
     for u in suspended_users[:5]:
-        uname = u.get("username") or u.get("email") or u.get("_id") or "unknown"
+        uname = "user id " + str(u.get("_id") or u.get("id") or "unknown")
         sample_names.append(uname)
 
     if suspended_count > 0:
