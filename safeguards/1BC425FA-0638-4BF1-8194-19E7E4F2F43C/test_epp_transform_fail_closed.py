@@ -53,7 +53,7 @@ def test_pass_body_measures_each_key_on_its_own():
     assert tr["isEDRDeployed"] is True
     assert tr["edrDeployedPercentage"] == 100.0
     assert tr["isEPPEnabledForCriticalSystems"] is True
-    assert tr["isEPPLoggingEnabled"] is None
+    assert "isEPPLoggingEnabled" not in tr
 
 
 def test_edr_is_not_an_alias_of_epp():
@@ -82,9 +82,40 @@ def test_critical_systems_reads_servers():
 
 
 def test_critical_systems_without_servers_is_not_answered():
-    tr, status = run({"items": [endpoint("computer", FULL)]})
+    # absent, not None: Token-Service records an absent key as not evaluated and grades a present None
+    out = EPP.transform({"items": [endpoint("computer", FULL)]})
+    tr = out["transformedResponse"]
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+    assert "isEPPEnabledForCriticalSystems" not in tr
+    assert "isEPPLoggingEnabled" not in tr
+    findings = " ".join(out["additionalInfo"]["evaluation"]["additionalFindings"])
+    assert "isEPPEnabledForCriticalSystems" in findings and "isEPPLoggingEnabled" in findings
+
+
+def test_servers_only_estate_reads_its_protection():
+    tr, status = run({"items": [endpoint("server", FULL)]})
     assert status == "success"
-    assert tr["isEPPEnabledForCriticalSystems"] is None
+    assert tr["requiredCoveragePercentage"] == 100
+    assert tr["requiredConfigurationPercentage"] == 100
+    assert tr["isEndpointSecurityEnabled"] is True
+    assert tr["isEPPEnabled"] is True
+
+
+def test_mixed_estate_counts_servers_toward_required_coverage():
+    tr, _ = run({"items": [endpoint("computer", FULL), endpoint("server", ["coreAgent"])]})
+    assert tr["requiredCoveragePercentage"] == 50
+
+
+@pytest.mark.parametrize("body", [
+    {"data": [endpoint("computer", FULL)], "validation": {"status": "passed"}, "paginationTruncated": True},
+    {"items": [endpoint("computer", FULL)], "paginationTruncated": True},
+    {"items": [endpoint("computer", FULL)], "pages": {"paginationTruncated": "true"}},
+    {"api_response": {"items": [endpoint("computer", FULL)], "paginationTruncated": True}},
+])
+def test_truncation_flag_at_any_level_is_not_evaluated(body):
+    tr, status = run(body)
+    assert status == "error"
+    assert all(value is None for value in tr.values())
 
 
 def test_not_installed_product_protects_nothing():
