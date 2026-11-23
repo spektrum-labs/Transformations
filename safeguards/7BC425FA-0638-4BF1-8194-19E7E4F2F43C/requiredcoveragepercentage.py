@@ -207,6 +207,11 @@ def transform(input):
                 validation,
                 "The machine inventory has more pages than were read (@odata.nextLink still present)")
 
+        # A list with no onboardingStatus on any record is not a machine inventory (an alert list read
+        # as one scored 0 on a wrong source), so coverage is Not evaluated rather than a measured 0.
+        if machine_data and not any(isinstance(m, dict) and "onboardingStatus" in m for m in machine_data):
+            return not_evaluated(validation, "No machine record carries onboardingStatus, so onboarding cannot be read")
+
         # Exclude devices marked as excluded
         non_excluded = [m for m in machine_data if isinstance(m, dict) and str(m.get("isExcluded", "false")).lower() != "true"]
 
@@ -221,8 +226,8 @@ def transform(input):
         eligibleDevices = len(eligibleMachines)
         protectedDevices = len(protectedMachines)
 
-        allDevicesPercentage = round((protectedDevices / allDevices) * 100) if allDevices > 0 else 0
-        eligibleDevicesPercentage = round((protectedDevices / eligibleDevices) * 100) if eligibleDevices > 0 else 0
+        allDevicesPercentage = (100 * protectedDevices) // allDevices if allDevices > 0 else 0
+        eligibleDevicesPercentage = (100 * protectedDevices) // eligibleDevices if eligibleDevices > 0 else 0
 
         # No eligible device is an empty read, not full coverage: 0 of 0 proves nothing, so the
         # criterion is Not evaluated (None plus a dataCollection error), never 100.
@@ -234,7 +239,8 @@ def transform(input):
 
         criteriaValue = eligibleDevicesPercentage
 
-        if criteriaValue >= 100:
+        # Decided on the counts and floored for display: 199 of 200 shows 99 and fails, never rounds up to a pass.
+        if protectedDevices == eligibleDevices:
             pass_reasons.append(f"All eligible devices are protected: {protectedDevices}/{eligibleDevices} (100%)")
         else:
             fail_reasons.append(f"Not all eligible devices are protected: {protectedDevices}/{eligibleDevices} ({eligibleDevicesPercentage}%)")
