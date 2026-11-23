@@ -1,7 +1,10 @@
 def transform(input):
     """
     Evaluates if the license has been purchased for Addigy.
-    Checks the API permissions response to verify valid API key/subscription.
+    The permissions response lists what the API key may do; it carries no subscription or
+    licence field, so a populated permissions list shows only that the key was accepted. Only
+    an explicit licence field decides; a permissions list or any other body is Not evaluated
+    (None), and an error or explicit OFF is False.
 
     Parameters:
         input (dict): The JSON data containing Addigy API permissions response.
@@ -23,21 +26,8 @@ def transform(input):
         if 'response' in input:
             input = input['response']
 
-        # If we got a valid response from the permissions endpoint,
-        # it means the API key is valid and the subscription is active
-        # `input is not None` asked whether a RESPONSE ARRIVED, not what it said, so any
-        # 2xx body -- including one describing the control as OFF -- satisfied this
-        # criterion and no input could make it false. Resolved from the payload now.
-        default_value = affirmative_signal(input)
-
-        # Check if permissions were returned (indicates valid subscription)
-        has_permissions = False
-        if isinstance(input, dict):
-            # Check for permissions array or any valid response data
-            permissions = input.get('permissions', input.get('data', []))
-            has_permissions = len(permissions) > 0 if isinstance(permissions, list) else bool(permissions)
-
-        license_purchased = has_permissions or default_value
+        # A permissions list shows the API key was accepted, not that a licence is active.
+        license_purchased = affirmative_signal(input)
 
         if license_purchased is None:
             return {

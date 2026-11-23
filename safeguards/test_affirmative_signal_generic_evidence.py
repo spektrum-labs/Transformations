@@ -84,17 +84,12 @@ AUDIT_LOG_FILES = [
     "mfa/azure/ismfaloggingenabled.py",
 ]
 
-# Files whose own vendor rule, outside affirmative_signal, already reads a bare list or a
-# `data` object as evidence (an authenticated appliance answer, a permissions or
-# environments list). That is a per-vendor decision this change leaves alone, so those
-# shapes are not generated for them; every other generic body is still judged.
+# Files whose own vendor rule, outside affirmative_signal, reads a bare list as evidence of
+# the criterion itself (active sessions for session monitoring). Those shapes are not
+# generated for them; every other generic body is still judged. The licence checks that
+# used to pass on a vault, managed-account, environments or permissions list no longer do.
 OWN_LIST_RULE = {
-    "epp/addigy/confirmedlicensepurchased.py": {"data_object"},
-    "epp/liongard/confirmedlicensepurchased.py": {"bare_list", "items_list", "data_object", "endpoint_list"},
-    "iam/beyondtrust-pra/confirmedlicensepurchased.py": {"bare_list"},
-    "iam/beyondtrust/confirmedlicensepurchased.py": {"bare_list"},
     "iam/beyondtrust/issessionmonitoringenabled.py": {"bare_list"},
-    "identity-and-access-management/beyondtrust/confirmedLicensePurchased.py": {"bare_list"},
     "identity-and-access-management/beyondtrust/isSessionMonitoringEnabled.py": {"bare_list"},
 }
 
