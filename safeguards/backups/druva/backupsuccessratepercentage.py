@@ -2,7 +2,7 @@
 Transformation: backupSuccessRatePercentage
 Vendor: Druva (Data Security Cloud, Enterprise Workloads)  |  Category: Backups
 Method: getBackupActivity -> POST /platform/reporting/v1/reports/ewBackupActivity
-Evaluates: Percentage of Druva backup sets whose latest finished job in the Backup Activity report is Successful or Successful with errors. The read window is the one the integration definition sets (7 days today: lastUpdatedTime GTE utcNow-7d). Queued/Running jobs are excluded; earlier jobs superseded by a later run on the same set do not count.
+Evaluates: Percentage of Druva backup sets whose latest finished job in the Backup Activity report is Successful or Successful with errors. The read window is the one the integration definition sets (7 days today: lastUpdatedTime GTE utcNow-7d). Queued/Running jobs are excluded, and a set whose latest job is Waiting for retry is left out (neither pass nor fail); earlier jobs superseded by a later run on the same set do not count.
 Unevaluated (None, dataCollection.status "error"): zero jobs in the window, only in-flight jobs, a partial read, a missing, error or unrecognised body, failed input validation, or a transformation error.
 """
 import json
@@ -190,8 +190,8 @@ def parse_time(value):
 
 # A job that has not finished yet is in neither the numerator nor the denominator.
 # Not yet finished: excluded from both sides. Matched as prefixes ("Queued (2)", "Running - 40%"), with "waiting" exact.
-# Waiting for retry, Paused and Resuming are not here on purpose: they follow a failed or stopped attempt, so they
-# score as not passing rather than letting an older success decide the set.
+# Paused and Resuming are not here on purpose: they follow a stopped attempt, so they score as not passing rather than
+# letting an older success decide the set.
 IN_FLIGHT = ("queued", "running", "in progress", "scheduled", "pending", "starting")
 # "Successful with errors" passes: the job finished and protected the set; Druva uses it when only some files were skipped.
 PASSING = ("successful", "successful with errors")
@@ -205,6 +205,12 @@ def status_of(row):
 def is_in_flight(row):
     status = status_of(row)
     return status == "waiting" or status.startswith(IN_FLIGHT)
+
+
+def is_retrying(row):
+    """Waiting for retry: Druva will rerun a failed attempt. When it is a set's latest job the set is neither a failure
+    nor a pass, so it is left out of both sides; an older success must not decide it either."""
+    return status_of(row).startswith("waiting for retry")
 
 
 def set_key(row, index):
@@ -303,17 +309,21 @@ def evaluate(jobs, partial, meta, reported):
     """Score each backup set by its latest finished job: Successful and Successful with errors pass, anything else fails."""
     in_flight = [r for r in jobs if is_in_flight(r)]
     finished = [r for r in jobs if not is_in_flight(r)]
-    latest = latest_per_set(finished)
+    newest = latest_per_set(finished)
+    retrying = [r for r in newest if is_retrying(r)]
+    latest = [r for r in newest if not is_retrying(r)]
     summary = {"backupJobsReported": reported, "backupRowsIgnored": reported - len(jobs), "backupJobsInFlight": len(in_flight),
-               "backupJobsSuperseded": len(finished) - len(latest), "backupSetsEvaluated": len(latest)}
+               "backupJobsSuperseded": len(finished) - len(newest), "backupSetsRetrying": len(retrying),
+               "backupSetsEvaluated": len(latest)}
     if meta.get("windowStart"):
         summary["windowStart"] = meta["windowStart"]
     summary["partialRead"] = partial
     if partial:
         return None, summary, ["The Druva Backup Activity read is partial (more pages were not read), so it cannot answer this; nothing was concluded"]
     if len(latest) == 0:
-        return None, summary, ["All " + str(len(jobs)) + " Druva backup jobs read are still in flight (queued or running), so no finished job was measured"]
-    tail = ("; " + str(len(in_flight)) + " in-flight jobs excluded, " + str(len(finished) - len(latest))
+        return None, summary, ["All " + str(len(jobs)) + " Druva backup jobs read are still in flight (queued, running or waiting for retry), so no finished job was measured"]
+    tail = ("; " + str(len(in_flight)) + " in-flight jobs excluded, " + str(len(retrying)) + " sets waiting for retry excluded, "
+            + str(len(finished) - len(newest))
             + " earlier jobs superseded by a later run" + (" (read since " + meta["windowStart"] + ")" if meta.get("windowStart") else ""))
     ok = [r for r in latest if status_of(r) in PASSING]
     summary["backupSetsSuccessful"] = len(ok)

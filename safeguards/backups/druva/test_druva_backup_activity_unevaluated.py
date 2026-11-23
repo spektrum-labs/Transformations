@@ -421,7 +421,8 @@ def test_mixed_read_counts_add_up_and_leak_nothing(mode):
         counts = out["transformedResponse"]
         assert counts["backupJobsReported"] == 6
         assert counts["backupJobsReported"] == (counts["backupJobsInFlight"] + counts["backupJobsSuperseded"]
-                                                + counts["backupSetsEvaluated"] + counts["backupRowsIgnored"])
+                                                + counts["backupSetsRetrying"] + counts["backupSetsEvaluated"]
+                                                + counts["backupRowsIgnored"])
         assert counts["backupRowsIgnored"] == 0
         assert (counts["backupJobsInFlight"], counts["backupJobsSuperseded"], counts["backupSetsEvaluated"]) == (2, 1, 3)
         assert value == (33.33 if key == "backupSuccessRatePercentage" else 2)
@@ -498,10 +499,29 @@ def test_utc_offsets_are_applied_before_comparing(mode):
 
 
 @pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("status", ["Waiting for retry", "Paused", "Resuming"])
-def test_retry_and_paused_states_score_as_not_passing(status, mode):
-    # these follow a failed or stopped attempt: an older Successful job must not decide the set (fail closed)
+@pytest.mark.parametrize("status", ["Paused", "Resuming"])
+def test_paused_states_score_as_not_passing(status, mode):
+    # these follow a stopped attempt: an older Successful job must not decide the set (fail closed)
     assert both_orders([at(1, 3, "Successful"), at(2, 9, status)], mode) == (0.0, 1)
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("earlier", ["Successful", "Failed"])
+def test_waiting_for_retry_is_neither_pass_nor_fail(earlier, mode):
+    # a set whose latest job is Waiting for retry leaves both sides; the older job does not decide it either way
+    rows = [at(1, 3, earlier), at(2, 9, "Waiting for retry"), job(5), job(6, status="Failed")]
+    assert both_orders(rows, mode) == (50.0, 1)
+    counts = run("failedBackupJobsCount", rows, mode)[1]["transformedResponse"]
+    assert (counts["backupSetsRetrying"], counts["backupSetsEvaluated"], counts["backupJobsSuperseded"]) == (1, 2, 1)
+    reason = run("backupSuccessRatePercentage", rows, mode)[1]["additionalInfo"]["evaluation"]["passReasons"][0]
+    assert "1 sets waiting for retry excluded" in reason
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("key", ["backupSuccessRatePercentage", "failedBackupJobsCount"])
+def test_only_retrying_sets_is_unevaluated(key, mode):
+    out = assert_unevaluated(key, [at(1, 3, "Failed"), at(2, 9, "Waiting for retry"), job(5, status="Queued")], mode)
+    assert "waiting for retry" in out["additionalInfo"]["dataCollection"]["errors"][0]
 
 
 @pytest.mark.parametrize("mode", MODES)
