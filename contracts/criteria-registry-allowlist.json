@@ -4,7 +4,7 @@
   "generated_by": "tools/check_criteria_registry.py --emit-allowlist",
   "how_to_shrink": "register the key (contracts/criteria-registry/keys/<key>.json) with what is evidenced and \"unknown\" for what is not, or stop emitting it. Never add to this list by hand.",
   "count": {
-    "unregistered": 1515,
+    "unregistered": 1510,
     "type": 0
   },
   "unregistered": [
@@ -24,8 +24,6 @@
     "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/epp_transform.py::isEDRDeployed",
     "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/epp_transform.py::isEPPDeployed",
     "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/epp_transform.py::isEPPEnabled",
-    "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/epp_transform.py::isEPPEnabledForCriticalSystems",
-    "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/epp_transform.py::isEPPLoggingEnabled",
     "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/epp_transform.py::isEPPMisconfigured",
     "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/epp_transform.py::isEndpointSecurityEnabled",
     "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/epp_transform.py::isMDREnabled",
@@ -459,7 +457,6 @@
     "safeguards/cac4b80f-a930-415e-b1e3-de285fe78452/epp_transform.py::isMDREnabled",
     "safeguards/cac4b80f-a930-415e-b1e3-de285fe78452/epp_transform.py::isMDRLoggingEnabled",
     "safeguards/cac4b80f-a930-415e-b1e3-de285fe78452/epp_transform.py::requiredConfigurationPercentage",
-    "safeguards/cac4b80f-a930-415e-b1e3-de285fe78452/isidpenabled.py::isSSOEnabledMDR",
     "safeguards/cac4b80f-a930-415e-b1e3-de285fe78452/ispatchmanagementenabled.py::isPatchManagementValid",
     "safeguards/cac4b80f-a930-415e-b1e3-de285fe78452/isremovablemediacontrolled.py::isRemovableMediaControlled",
     "safeguards/cloudsecurity/appomni/ismonitoringactive.py::isMonitoringActive",
@@ -657,10 +654,8 @@
     "safeguards/emailsecurity/avanan/isdnsconfigured.py::isDMARCConfigured",
     "safeguards/emailsecurity/avanan/isdnsconfigured.py::isDNSConfigured",
     "safeguards/emailsecurity/avanan/isdnsconfigured.py::isSPFConfigured",
-    "safeguards/emailsecurity/avanan/isemailsecurityloggingenabled.py::auditLogsCount",
     "safeguards/emailsecurity/avanan/isemailsecurityloggingenabled.py::isEmailLoggingEnabled",
     "safeguards/emailsecurity/avanan/isemailsecurityloggingenabled.py::isEmailSecurityLoggingEnabled",
-    "safeguards/emailsecurity/avanan/isemailsecurityloggingenabled.py::securityEventsCount",
     "safeguards/emailsecurity/avanan/ismfaenforcedforusers.py::isMFAEnforcedForUsers",
     "safeguards/emailsecurity/avanan/isurlrewriteenabled.py::isURLRewriteEnabled",
     "safeguards/emailsecurity/check-point-software-technologies-email-security/isAccountTakeoverDetectionEnabled.py::atoEventCount",
