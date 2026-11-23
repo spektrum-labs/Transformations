@@ -3,7 +3,7 @@ Transformation: isBannerModeEnforced
 Vendor: Microsoft
 Category: Email Security / Transport Rules
 
-Evaluates if banner mode is enforced by checking transport rules for Disclaimer or SubjectPrefix actions.
+Evaluates if banner mode is enforced by checking transport rules for Disclaimer, SubjectPrefix or external PrependSubject actions.
 """
 
 import json
@@ -154,7 +154,8 @@ def transform(input):
             if rule.get('State') == 'Enabled':
                 actions = rule.get('Actions', [])
                 if actions:
-                    matching_actions = [action for action in actions if ('Disclaimer' in action or 'SubjectPrefix' in action)]
+                    # A subject prefix is a banner only on mail from outside the organization; [SPAM]-style tags are not.
+                    matching_actions = [action for action in actions if ('Disclaimer' in action or 'SubjectPrefix' in action or ('PrependSubject' in action and rule.get('FromScope') == 'NotInOrganization'))]
                     if matching_actions:
                         banner_rules.append({
                             'Name': rule.get('Name', 'Unknown'),
@@ -173,7 +174,7 @@ def transform(input):
             if len(banner_rules) > 0:
                 fail_reasons.append(f"Found {len(banner_rules)} banner rules but none are in Enforce mode")
             else:
-                fail_reasons.append("No transport rules with Disclaimer or SubjectPrefix actions found")
+                fail_reasons.append("No transport rules with Disclaimer, SubjectPrefix or external PrependSubject actions found")
             recommendations.append("Configure transport rules with banner/disclaimer actions in Enforce mode")
 
         return create_response(
