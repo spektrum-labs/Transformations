@@ -199,8 +199,8 @@ def test_edr_percentages_never_round_up_to_a_boundary():
 
 
 def test_existing_fields_keep_their_rounding():
-    # Only the edr* fields floor; the existing figures keep their rounding (199/200 -> 100).
-    assert out(LEGACY, fleet(200, 1, 0, 0))["requiredCoveragePercentage"] == 100
+    # The classic file floors too (199/200 -> 99); the One-Click file keeps its rounding.
+    assert out(LEGACY, fleet(200, 1, 0, 0))["requiredCoveragePercentage"] == 99
     result = out(ONECLICK, fleet(200, 1, 0, 0))
     assert (result["requiredCoveragePercentage"], result["serverCoveragePercentage"]) == (100, 100)
 
