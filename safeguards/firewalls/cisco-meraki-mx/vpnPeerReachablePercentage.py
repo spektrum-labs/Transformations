@@ -65,28 +65,71 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def not_measured(problem, validation):
+    """Nothing usable was read: the criterion is None with a dataCollection error, never a fail."""
+    return create_response(
+        result={"vpnPeerReachablePercentage": None},
+        validation=validation,
+        fail_reasons=[problem],
+        recommendations=[
+            "Verify the Meraki site-to-site VPN status is readable with this key "
+            "(getOrganizationApplianceVpnStatuses)."
+        ],
+        api_errors=[problem],
+        metadata={"transformationId": "vpnPeerReachablePercentage", "vendor": "Cisco Meraki MX", "category": "firewalls"},
+    )
+
+
+def network_status_objects(data):
+    """The per-network VPN status objects in the body, or [] when the body is not that list.
+
+    An empty body, an error body and text are not a read. A network status object carries its
+    network id or name and its peer lists."""
+    networks = None
+    if isinstance(data, list):
+        networks = data
+    elif isinstance(data, dict):
+        networks = data.get("apiResponse")
+        if networks is None:
+            networks = data.get("data")
+    if not isinstance(networks, list):
+        return []
+    keys = ("networkId", "networkName", "merakiVpnPeers", "thirdPartyVpnPeers")
+    return [n for n in networks if isinstance(n, dict) and any(k in n for k in keys)]
+
+
+def peer_list(value):
+    """(peers, readable): a peer list is a list. Absent or null is no peers; anything else is unreadable."""
+    if value is None:
+        return [], True
+    if isinstance(value, list):
+        return value, True
+    return [], False
+
+
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
-
-    networks = data.get("apiResponse")
-    if networks is None:
-        networks = data.get("data")
-    if not isinstance(networks, list):
-        networks = []
+    networks = network_status_objects(data)
+    if not networks:
+        return not_measured(
+            "No per-network VPN status was returned by Meraki; nothing to measure.", validation
+        )
 
     total_peers = 0
     reachable_peers = 0
     unreachable_names = []
     network_names_seen = []
+    unreadable = []
 
     for net in networks:
         if not isinstance(net, dict):
             continue
         net_name = net.get("networkName") or net.get("networkId") or "unknown-network"
         network_names_seen.append(net_name)
-        meraki_peers = net.get("merakiVpnPeers") or []
-        third_party_peers = net.get("thirdPartyVpnPeers") or []
+        meraki_peers, meraki_ok = peer_list(net.get("merakiVpnPeers"))
+        third_party_peers, third_ok = peer_list(net.get("thirdPartyVpnPeers"))
+        if not (meraki_ok and third_ok):
+            unreadable.append(str(net_name))
         all_peers = list(meraki_peers) + list(third_party_peers)
         for peer in all_peers:
             if not isinstance(peer, dict):
@@ -98,6 +141,13 @@ def transform(input):
             else:
                 peer_name = peer.get("name") or peer.get("publicIp") or "unknown-peer"
                 unreachable_names.append(f"{net_name}:{peer_name}({reachability})")
+
+    if unreadable:
+        return not_measured(
+            "The VPN peer list of %d of %d network(s) could not be read (%s), so the share of "
+            "reachable peers cannot be measured." % (len(unreadable), len(network_names_seen), ", ".join(unreadable[:10])),
+            validation,
+        )
 
     if total_peers == 0:
         percentage = 0.0

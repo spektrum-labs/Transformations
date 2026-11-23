@@ -9,6 +9,8 @@ class LegacyauthblockedInput(BaseModel):
     Criteria key: legacyAuthBlocked
     """
     value: Optional[List[Dict[str, Any]]] = Field(None, description="List of Conditional Access policies")
+    securityDefaults: Optional[Dict[str, Any]] = Field(
+        None, description="GET /v1.0/policies/identitySecurityDefaultsEnforcementPolicy, merged in by the workflow")
 
     class Config:
         extra = "allow"

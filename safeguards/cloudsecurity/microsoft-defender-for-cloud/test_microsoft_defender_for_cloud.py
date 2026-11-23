@@ -100,6 +100,62 @@ def test_permission_error_names_the_roles():
     assert "Security Reader" in out["additionalInfo"]["dataCollection"]["requiredPermission"]
 
 
+# Integration-Service hands an ARM 403 AuthorizationFailed over as this envelope (vendorErrorAsResponse with
+# kind missing_permission); the body is ARM's own error object.
+def refusal(code="AuthorizationFailed", action="Microsoft.Security/assessments/read"):
+    return {"vendorErrorAsResponse": {
+        "status": 403, "bodyContains": "AuthorizationFailed", "kind": "missing_permission",
+        "errorCode": "SPK-IS-INTEG-002", "requiredScopes": ["Reader"],
+        "body": {"error": {"code": code, "message": "The client does not have authorization to perform action '"
+                           + action + "' over scope '" + SUB + "' or the scope is invalid."}}}}
+
+
+SECURITY_PLANE = [k for k in KEYS if k != "isIAMLoggingEnabled"]
+
+
+@pytest.mark.parametrize("key", KEYS)
+@pytest.mark.parametrize("code", ["AuthorizationFailed", "LinkedAuthorizationFailed"])
+def test_role_refusal_envelope_is_not_measured_with_the_role_to_assign(key, code):
+    body = refusal(code)
+    if key == "criticalOpenFindingsCount":
+        body = {"assessments": refusal(code), "assessmentMetadata": refusal(code)}
+    out = MODULES[key].transform(body)
+    assert out["transformedResponse"][key] is None
+    collection = out["additionalInfo"]["dataCollection"]
+    assert collection["status"] == "error" and collection["errorCode"] == "permission_not_granted"
+    advice = " ".join(out["additionalInfo"]["evaluation"]["recommendations"])
+    assert "Access control (IAM)" in advice and "Reader role" in advice
+    # least privilege: one role is asked for, never both and never a write role
+    assert " and Security Reader" not in collection["requiredPermission"] + advice
+    for write_role in ("Contributor", "Owner", "Security Admin"):
+        assert write_role not in advice
+
+
+@pytest.mark.parametrize("key", SECURITY_PLANE)
+def test_security_plane_reads_accept_either_read_role(key):
+    out = MODULES[key].transform({"assessments": refusal(), "assessmentMetadata": refusal()}
+                                 if key == "criticalOpenFindingsCount" else refusal())
+    assert out["additionalInfo"]["dataCollection"]["requiredPermission"] == "Reader or Security Reader on the subscription"
+    assert "or the narrower Security Reader" in out["additionalInfo"]["evaluation"]["recommendations"][0]
+
+
+def test_activity_log_export_needs_reader_not_security_reader():
+    out = MODULES["isIAMLoggingEnabled"].transform(refusal(action="Microsoft.Insights/diagnosticSettings/read"))
+    assert out["transformedResponse"]["isIAMLoggingEnabled"] is None
+    assert out["additionalInfo"]["dataCollection"]["requiredPermission"].startswith("Reader on the subscription")
+    advice = out["additionalInfo"]["evaluation"]["recommendations"][0]
+    assert "Security Reader alone cannot read" in advice and "Reader covers every check" in advice
+
+
+def test_metadata_refusal_leaves_unresolved_severities_unevaluated():
+    key = "criticalOpenFindingsCount"
+    a = [assessment(1, MFA_OWNER, "Unhealthy"), assessment(2, OTHER, "Healthy")]
+    assert value(key, {"assessments": page(a), "assessmentMetadata": refusal()}) is None
+    # inline severities still count when the tenant-scope metadata read was refused
+    inline = [assessment(1, MFA_OWNER, "Unhealthy", "High"), assessment(2, STORAGE, "Unhealthy", "Low")]
+    assert value(key, {"assessments": page(inline), "assessmentMetadata": refusal()}) == 1
+
+
 # secure score -----------------------------------------------------------------------------------
 
 def score(percentage, current=23.53, maximum=39):

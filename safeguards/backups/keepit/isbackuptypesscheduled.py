@@ -27,11 +27,12 @@ def transform_bare(input):
     backup_interval attribute, else the product's backup-interval resource).
 
     Proves: each connector is on a recurring schedule rather than manual runs only.
-    Does not prove: that the scheduled runs succeed (see backupSuccessRatePercentage). A
-    disable_auto_backup value that is not a recognisable true/false, a missing or
-    unparseable interval on a connector answers false. A connector whose attributes were not
-    read, a missing /resources or /attributes step, or an unreadable body answers None (not
-    measured).
+    Does not prove: that the scheduled runs succeed (see backupSuccessRatePercentage). False
+    only when a connector states disable_auto_backup true. A disable_auto_backup value that is
+    not a recognisable true/false, or a missing or unparseable interval on a connector, proves
+    nothing about its schedule: with no connector stated off, the answer is None (not
+    measured). A connector whose attributes were not read, a missing /resources or
+    /attributes step, or an unreadable body also answers None.
     """
     key = "isBackupTypesScheduled"
 
@@ -124,6 +125,7 @@ def transform_bare(input):
         product_interval = resources.get("backup-interval")
         scheduled = []
         not_scheduled = []
+        unreadable = []
         for i in range(len(clouds)):
             c = clouds[i]
             kind = str(c.get("type") or "")
@@ -143,7 +145,7 @@ def transform_bare(input):
                     attrs[str(a.get("name")).strip()] = a.get("value")
             flag = str(attrs.get("disable_auto_backup") if attrs.get("disable_auto_backup") is not None else "").strip().lower()
             if "disable_auto_backup" in attrs and flag not in ["false", "0", "no", "true", "1", "yes"]:
-                not_scheduled.append({"connector": label, "why": "disable_auto_backup has an unrecognised value"})
+                unreadable.append({"connector": label, "why": "disable_auto_backup has an unrecognised value"})
                 continue
             if flag in ["true", "1", "yes"]:
                 not_scheduled.append({"connector": label, "why": "disable_auto_backup is set"})
@@ -154,15 +156,20 @@ def transform_bare(input):
                 interval, source = product_interval, "product backup-interval"
             days = duration_days(interval)
             if days is None:
-                not_scheduled.append({"connector": label, "why": "no readable backup interval (" + source + ": " + str(interval) + ")"})
+                unreadable.append({"connector": label, "why": "no readable backup interval (" + source + ": " + str(interval) + ")"})
                 continue
             scheduled.append({"connector": label, "interval": interval, "source": source})
-        result = len(not_scheduled) == 0
-        if result:
-            reason = "All " + str(len(clouds)) + " cloud connectors run on an automatic backup interval"
+        if len(not_scheduled) > 0:
+            result = False
+            reason = str(len(not_scheduled)) + " of " + str(len(clouds)) + " cloud connectors have automatic backups switched off"
+        elif len(unreadable) > 0:
+            result = None
+            reason = str(len(unreadable)) + " of " + str(len(clouds)) + " cloud connectors have no readable automatic schedule and none is stated off, so this is not measured"
         else:
-            reason = str(len(not_scheduled)) + " of " + str(len(clouds)) + " cloud connectors are not on a readable automatic schedule"
-        return {key: result, "reason": reason, "scheduledConnectors": scheduled, "unscheduledConnectors": not_scheduled}
+            result = True
+            reason = "All " + str(len(clouds)) + " cloud connectors run on an automatic backup interval"
+        return {key: result, "reason": reason, "scheduledConnectors": scheduled, "unscheduledConnectors": not_scheduled,
+                "unreadableConnectors": unreadable}
     except Exception as e:
         return {key: None, "error": str(e)}
 

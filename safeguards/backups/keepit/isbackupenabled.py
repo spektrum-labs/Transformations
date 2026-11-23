@@ -24,9 +24,13 @@ def transform_bare(input):
 
     Proves: a SaaS backup connector exists and is switched on in Keepit.
     Does not prove: that its backup jobs succeed, how often they run, or which users,
-    mailboxes or sites the connector covers. A connector whose <enabled> element is absent
-    is not counted (the schema marks it optional). An unreadable body, an error envelope or an
-    unexpected <devices> shape answers None (not measured); an empty <devices/> answers false.
+    mailboxes or sites the connector covers. A connector whose <enabled> element is absent is
+    not counted as enabled, but it is not counted as disabled either (the schema marks the
+    element optional, and a real Keepit response carries none): when no connector is stated
+    enabled and at least one has no <enabled> element, the answer is None (not measured). False
+    means every connector is stated disabled or scheduled for deletion, or the account has none.
+    An unreadable body, an error envelope or an unexpected <devices> shape answers None (not
+    measured); an empty <devices/> answers false.
     """
     key = "isBackupEnabled"
 
@@ -100,6 +104,9 @@ def transform_bare(input):
             reason = str(len(enabled)) + " of " + str(len(clouds)) + " cloud connectors are enabled and not scheduled for deletion"
         elif len(clouds) == 0:
             reason = "The account has no cloud connectors"
+        elif len(unstated) > 0:
+            result = None
+            reason = "Keepit does not state whether " + str(len(unstated)) + " of " + str(len(clouds)) + " cloud connectors are enabled (no <enabled> element) and none is stated enabled, so this is not measured"
         else:
             reason = "No cloud connector is enabled: " + str(len(disabled)) + " disabled, " + str(len(pending_deletion)) + " scheduled for deletion, " + str(len(unstated)) + " without an <enabled> element"
 

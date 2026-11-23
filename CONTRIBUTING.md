@@ -38,7 +38,7 @@ this transformation does not recognise, the answer is `False` — not `True`, an
 This is enforced in CI. `.github/workflows/transform-contract.yml` runs
 `tools/check_fail_closed.py` on every pull request and on every push to `develop`,
 `staging` and `main`. It hands each `transform()` a set of bodies that contain **no
-evidence about any estate** and fails the build if **any** key comes back `True` -- or
+evidence about any environment** and fails the build if **any** key comes back `True` -- or
 any inverted key (below) comes back `False`. Every key is judged, whatever its name: the
 gate used to judge only keys shaped `^(confirmed|is|are|has)[A-Z]`, and ten live rubber
 stamps (`authTypesAllowed`, `confirmPasswordPolicyEnforced`, `keysHaveExpirationDate`, ...)
@@ -140,8 +140,8 @@ tells them apart:
 A wholly unreadable scope is a `403`, which these transforms already report as not
 measured. A *partially* readable scope is the dangerous case: it returns `200` with only
 the readable subset "without any indication that the result might be partial". Zero rows
-therefore cannot be shown to have covered the estate, and a read that did not cover the
-estate may not produce a measured answer.
+therefore cannot be shown to have covered the environment, and a read that did not cover the
+environment may not produce a measured answer.
 
 ```python
 # YES. Resource Graph returns zero rows for resources the caller cannot read, and a

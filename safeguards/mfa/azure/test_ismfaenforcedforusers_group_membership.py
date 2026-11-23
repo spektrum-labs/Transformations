@@ -3,7 +3,7 @@
 Rule (5 Oct 2026): group math can turn "not evaluated" into True. It turns it into False only when membership was read
 whole and some enabled members are reached by no enabled MFA policy (code owner ruling, 5 Oct; see
 test_ismfaenforcedforusers_members_outside.py). With no membership keys in the input the output is identical to the
-shipped behaviour. Synthetic estate only (public repo).
+shipped behaviour. Synthetic environment only (public repo).
 """
 import builtins as real_builtins
 import copy
@@ -98,7 +98,9 @@ def test_two_named_exclusions_allowed_three_not():
     ok, _ = run(body([policy("A", excludeUsers=U[4:6])], members=[U[:4]], groups=[G1]))
     assert ok is True
     no, _ = run(body([policy("A", excludeUsers=U[3:6])], members=[U[:3]], groups=[G1]))
-    assert no is None  # more than 2 named exclusions: the policy is not a candidate
+    # More than 2 named exclusions: the policy is not a candidate, but the 3 excluded accounts are reached by no MFA
+    # policy, from a whole membership read: a measured gap (WI-3a, 16 Nov 2026).
+    assert no is False
     spread, out = run(body([policy("A", include_groups=(G1,), excludeUsers=U[4:6]),
                             policy("B", include_groups=(G2,), excludeUsers=U[2:4])], members=[U[:4], U[:2]]))
     assert spread is None and "more than 2" in reason(out)  # 4 in total across the counting policies
@@ -192,9 +194,16 @@ def test_membership_false_only_when_a_member_is_reached_by_no_mfa_policy():
         for members in outcomes:
             value, _ = run(body([shape], members=members, groups=[G1]))
             reached = set(members[0]) if not shape["conditions"]["users"]["includeUsers"] else set(U)
+            if shape["conditions"]["users"].get("excludeGroups"):
+                reached = reached - set(members[0])  # excluded through the group (G1) that was read
+            reached = reached - set(shape["conditions"]["users"].get("excludeUsers") or [])
             if value is False:
                 assert base is False or set(U) - reached
-            if base is True:
+            if base is True and shape["conditions"]["users"].get("excludeGroups") and len(members[0]) > 2:
+                # Row 36B (c), decision 18 Oct 2026: one excluded group is break-glass (True) until its member list,
+                # read whole, holds more than two accounts. Then it is not break-glass and the key is never True.
+                assert value is not True
+            elif base is True:
                 assert value is True
 
 

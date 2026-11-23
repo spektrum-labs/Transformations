@@ -107,6 +107,12 @@ def transform(input):
         nodes = []
         if not api_errors:
             api_errors.append("The response has no data.organization.repositories.nodes list.")
+    if isinstance(nodes, list) and not nodes and not api_errors and total_count is None:
+        # An empty list with no totalCount is what the paginator leaves when the organization could not be
+        # read at all (a wrong organization name, or a token that cannot see it): the connection object, and
+        # with it totalCount, never arrived. That is not "this organization has no repositories", which
+        # would carry totalCount 0, so it is withheld as a read failure rather than scored.
+        api_errors.append("No repositories came back for the organization, and the response carries no repository count: the organization name may be wrong or the token cannot see it.")
     if isinstance(page_info, dict) and page_info.get("truncated") is True:
         api_errors.append("The paginator stopped at its page limit, so not every repository was read.")
     if isinstance(total_count, int) and len(nodes) < total_count:

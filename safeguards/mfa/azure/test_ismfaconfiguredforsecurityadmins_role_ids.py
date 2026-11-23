@@ -100,16 +100,20 @@ def test_non_security_roles_do_not_count(mode, role):
 
 @pytest.mark.parametrize("mode", MODES)
 def test_all_users_minus_excluded_real_roles_fails(mode):
+    # Row 36 (overstated passes): any excluded directory role leaves the other roles unproven (a holder of both is
+    # excluded), so none counts as covered; the two excluded security roles are a proven gap, so the key is False.
     out = load(mode)(body(include_users=["All"], exclude_roles=[CA_ADMIN, PRIV_AUTH_ADMIN]))
     assert out["transformedResponse"][KEY] is False
-    covered = out["transformedResponse"]["coveredRoles"]
-    assert "Conditional Access Administrator" not in covered
-    assert "Privileged Authentication Administrator" not in covered
-    assert len(covered) == 4
+    assert out["transformedResponse"]["coveredRoles"] == []
+    fail = out["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert "Conditional Access Administrator" in fail and "Privileged Authentication Administrator" in fail
+    assert "2 excluded directory role(s)" in " ".join(out["additionalInfo"]["evaluation"]["additionalFindings"])
 
 
 @pytest.mark.parametrize("mode", MODES)
 def test_excluding_old_ids_no_longer_drops_security_roles(mode):
+    # The old ids are not security admin roles, so no role is a proven gap. Row 36 (overstated passes): excluding
+    # any directory role leaves coverage unproven (a security admin who also holds it is excluded): not evaluated.
     out = load(mode)(body(include_users=["All"], exclude_roles=[SHAREPOINT_ADMIN, CLOUD_DEVICE_ADMIN]))
-    assert len(out["transformedResponse"]["coveredRoles"]) == 6
-    assert out["transformedResponse"][KEY] is True
+    assert out["transformedResponse"][KEY] is None
+    assert "2 excluded directory role(s)" in " ".join(out["additionalInfo"]["dataCollection"]["errors"])

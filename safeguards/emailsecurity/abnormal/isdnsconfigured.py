@@ -24,8 +24,10 @@ from datetime import datetime
 
 
 def extract_input(input_data):
+    enriched_validation = None
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-        return input_data["data"], input_data["validation"]
+        enriched_validation = input_data["validation"]
+        input_data = input_data["data"]
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
@@ -38,6 +40,8 @@ def extract_input(input_data):
                     break
             if not unwrapped:
                 break
+    if enriched_validation is not None:
+        return data, enriched_validation
     return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
@@ -124,6 +128,21 @@ def get_protocol(data, name):
     return lowered.get(name.lower())
 
 
+NOT_EVALUATED_KEYS = ("isDNSConfigured", "isDMARCConfigured", "isDKIMConfigured", "isSPFConfigured")
+
+
+def not_evaluated(reason, validation=None, transformation_errors=None):
+    """An unavailable DNS helper is an API error: every key is None (Not evaluated), never False."""
+    return create_response(
+        result={k: None for k in NOT_EVALUATED_KEYS},
+        validation=validation,
+        api_errors=[reason],
+        transformation_errors=transformation_errors,
+        fail_reasons=[reason],
+        recommendations=["Re-run once the DNS lookup service is available."],
+    )
+
+
 def transform(input):
     is_dmarc_configured = False
     is_dkim_configured = False
@@ -139,16 +158,12 @@ def transform(input):
         data = coerce_data(data)
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={
-                    "isDNSConfigured": False,
-                    "isDMARCConfigured": False,
-                    "isDKIMConfigured": False,
-                    "isSPFConfigured": False
-                },
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
+            return not_evaluated("Input validation failed, so the DNS records could not be evaluated.", validation)
+
+        if not any(get_protocol(data, n) is not None for n in ("SPF", "DKIM", "DMARC")):
+            return not_evaluated(
+                "The DNS lookup returned no SPF, DKIM or DMARC result (error body, outage or empty "
+                "response), so the email DNS records could not be evaluated.", validation)
 
         pass_reasons = []
         fail_reasons = []
@@ -215,14 +230,8 @@ def transform(input):
         )
 
     except Exception as e:
-        return create_response(
-            result={
-                "isDNSConfigured": False,
-                "isDMARCConfigured": is_dmarc_configured,
-                "isDKIMConfigured": is_dkim_configured,
-                "isSPFConfigured": is_spf_configured
-            },
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=["Transformation error: " + str(e)]
+        return not_evaluated(
+            "Transformation error: " + str(e),
+            {"status": "error", "errors": [], "warnings": []},
+            [str(e)],
         )

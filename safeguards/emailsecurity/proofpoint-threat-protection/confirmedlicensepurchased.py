@@ -1,8 +1,13 @@
 """
 Transformation: confirmedLicensePurchased
 Vendor: Proofpoint (Threat Protection / Core Email Protection)  |  Category: Email Security
-Evaluates: An active, licensed Proofpoint tenant is processing inbound mail, proven by a
-non-zero protected-message volume in the executive inbound-protection-overview report.
+Evaluates: An active, licensed Proofpoint tenant, proven by the executive inbound-protection-overview
+report answering with its protection metrics (a valid 200 report is True even at zero volume: the API
+answering for the cluster proves the licence).
+
+Not evaluated (None, with a dataCollection error), never False: an unexpected, empty or error response, a missing
+report section, or an exception. False only when the report was read and shows the control
+below its threshold (isSafeLinksEnabled, isSafeAttachmentsEnabled). This check cannot read False: a valid report is True even at zero volume; an error, empty body, missing metrics or exception is None.
 """
 import json
 from datetime import datetime
@@ -23,6 +28,11 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
                     api_errors=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors: carry the reason.
+    if not api_errors and isinstance(result, dict) and "confirmedLicensePurchased" in result and result["confirmedLicensePurchased"] is None:
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -43,15 +53,15 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def evaluate(data):
     if not isinstance(data, dict):
-        return {"confirmedLicensePurchased": False, "reason": "Unexpected response type"}
+        return {"confirmedLicensePurchased": None, "reason": "Unexpected response type"}
     pre = data.get("preDeliveryProtectedMessages")
     post = data.get("postDeliveryProtectedMessages")
     overall = data.get("overallInboundProtection")
     if pre is None and post is None and overall is None:
-        return {"confirmedLicensePurchased": False,
+        return {"confirmedLicensePurchased": None,
                 "reason": "inbound-protection-overview did not return protection metrics"}
     total = (pre or 0) + (post or 0)
-    return {"confirmedLicensePurchased": total > 0,
+    return {"confirmedLicensePurchased": True,
             "protectedMessages": total,
             "overallInboundProtectionPct": round((overall or 0) * 100, 2)}
 
@@ -65,16 +75,16 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
         data, validation = extract_input(input)
         res = evaluate(data)
-        value = res.get(key, False)
+        value = res.get(key)
         extra = {k: v for k, v in res.items() if k != key and k != "reason"}
         if value:
-            pr = [f"Proofpoint processed {extra.get('protectedMessages')} protected messages; tenant is licensed and active"]
+            pr = [f"Proofpoint answered the inbound-protection report ({extra.get('protectedMessages')} protected messages in the window); tenant is licensed and active"]
             fr = []
         else:
             pr = []
             fr = [res.get("reason", "No protected-message volume returned")]
         return create_response({key: value, **extra}, validation, pr, fr,
-                               [] if value else ["Confirm the Proofpoint subscription is active for this cluster"],
+                               [] if value is not False else ["Confirm the Proofpoint subscription is active for this cluster"],
                                {key: value, **extra})
     except Exception as e:
-        return create_response({key: False}, None, [], ["Transformation error"], [], {}, [str(e)])
+        return create_response({key: None}, None, [], ["Transformation error: " + str(e)], [], {}, [str(e)])

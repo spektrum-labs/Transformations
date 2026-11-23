@@ -1,0 +1,37 @@
+{
+  "name": "meanTimeToVerificationAckMinutesCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Mean minutes from an alert's creation to the MDR's analysts verifying it and handing it to the customer's organization, over the incidents the MDR actually monitors.",
+  "valueType": "number",
+  "unit": "minutes",
+  "population": "the SOC-monitored incidents the connected managed-detection tenant lists that carry both a creation and an organization-assignment time",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "At least one SOC-monitored incident with both timestamps. Incidents the MDR marks as not monitored (tuning) or customer-monitored, and incidents the platform auto-routed by rule (is_autorouted), are excluded, because their assignment time is the auto-router's, not an analyst's. SOC-monitored incidents with no organization-assignment time yet (pending) or with an unreadable or negative interval (skipped) are counted and reported; when they outnumber the measured incidents the mean is not measured. Timestamps are read with their UTC offset and compared on the UTC line; one with no offset is skipped. A partial read is measured only when the measured incidents strictly outnumber the pending and skipped ones, and is reported as partial; any window's measured incidents are the ones already handed over, so its mean leans optimistic and the pending count beside it is what shows the slow tail. No such incident, no incidents, or an error or refused answer is not measured.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/mdr/critical-start/meanTimeToVerificationAckMinutesCount.py (Critical Start ZTAP, GET /api/1.5/incidents/, Incident.datetime_created, datetime_org_assigned, monitored_by; vendor client: github.com/demisto/content Packs/ZeroTrustAnalyticsPlatform)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-05",
+      "change": "Registered so the Critical Start transform can emit it."
+    }
+  ],
+  "notes": "Registered so the transform named in citations can emit it. Other vendors that use the same name were not reviewed, so the key stays proposed and V0."
+}

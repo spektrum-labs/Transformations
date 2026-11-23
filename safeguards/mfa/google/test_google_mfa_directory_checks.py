@@ -2,9 +2,12 @@
 
 Bodies follow the documented user resource (developers.google.com/admin-sdk/directory/reference/rest/v1/users)
 inside the envelope the paged method returns, with booleans as the strings "True"/"False" as Google - MFA
-bodies arrive. Each check: pass, flip, suspended/archived excluded, truncated, empty, None, error envelope."""
+bodies arrive. Each check: pass, flip, suspended/archived excluded, and every read that proves nothing
+(truncated, empty, None, error envelope, refusal, not JSON) is Not evaluated: the criterion is None and
+dataCollection.status is "error" with a reason, never False."""
 import copy
 import importlib.util
+import json
 import pathlib
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -82,21 +85,54 @@ def test_real_booleans_and_bare_list():
 def test_no_admin_is_not_measured():
     body = {"users": [user("b@x.test")]}
     assert value(ADMIN_COUNT, body) == (None, "error")
-    assert value(ADMIN_ALL, body) == (False, "error")
+    assert value(ADMIN_ALL, body) == (None, "error")
+    only_suspended_admin = {"users": [user("gone@x.test", admin="True", suspended="True"), user("b@x.test")]}
+    assert value(ADMIN_COUNT, only_suspended_admin) == (None, "error")
+    assert value(ADMIN_ALL, only_suspended_admin) == (None, "error")
+
+
+def assert_not_evaluated(module, body):
+    """Every criterion key None, and the failure on the channel Token-Service reads."""
+    out = module.transform(body)
+    inner = out["transformedResponse"]
+    assert module.CRITERIA_KEY in inner, body
+    assert all(got is None for got in inner.values()), (module.CRITERIA_KEY, body, inner)
+    collection = out["additionalInfo"]["dataCollection"]
+    assert collection["status"] == "error", (module.CRITERIA_KEY, body)
+    assert collection["errors"] and all(isinstance(e, str) and e for e in collection["errors"]), body
+
+
+ALL_MODULES = (ENFORCE, ENROL, EXEMPT, ADMIN_COUNT, ADMIN_ALL)
+REFUSAL = {"statusCode": 403, "message": "Forbidden"}
+INTEGRATION_ERROR_STATUS = {"status": "error", "message": "Integration execution error"}
 
 
 def test_not_measured_inputs():
     truncated = copy.deepcopy(GOOD)
     truncated["apiResponse"]["nextPageToken"] = "next"
-    empty_users = {"users": []}
-    for body in [truncated, {}, None, "", "{}", ERROR, GOOGLE_ERROR, {"users": None}, "<html/>"]:
-        for module in (ENFORCE, ENROL, EXEMPT, ADMIN_COUNT, ADMIN_ALL):
-            got, status = value(module, body)
-            assert status == "error" or got in (None, False), (module.CRITERIA_KEY, body)
-            assert got is not True, (module.CRITERIA_KEY, body)
-            if module is not ADMIN_ALL:
-                assert got is None, (module.CRITERIA_KEY, body)
-    for module in (ENFORCE, ENROL, EXEMPT, ADMIN_COUNT):
-        assert value(module, empty_users) == (None, "error")
+    for body in [truncated, {}, None, "", "{}", ERROR, GOOGLE_ERROR, REFUSAL, INTEGRATION_ERROR_STATUS,
+                 {"apiResponse": GOOGLE_ERROR}, {"users": None}, {"users": "x"}, [], "[]", "null",
+                 "<html/>", "<html>Bad gateway</html>", "not json at all", b"\x00not json", b"", 42]:
+        for module in ALL_MODULES:
+            assert_not_evaluated(module, body)
     scope = ADMIN_ALL.transform(GOOGLE_ERROR)["additionalInfo"]["dataCollection"]["errors"][0]
     assert "scope not granted" in scope
+
+
+def test_empty_user_list_is_not_evaluated():
+    for body in ({"users": []}, {"apiResponse": {"kind": "admin#directory#users", "users": []}}, []):
+        for module in ALL_MODULES:
+            assert_not_evaluated(module, body)
+    all_suspended = {"users": [user("gone@x.test", admin="True", suspended="True"),
+                               user("old@x.test", archived="True")]}
+    for module in ALL_MODULES:
+        assert_not_evaluated(module, all_suspended)
+
+
+def test_truncated_user_list_is_not_evaluated_even_when_a_finding_is_visible():
+    # An unread page could change the answer either way, so a partial list proves nothing.
+    truncated = with_user(GOOD, admin="True", enforced="False")
+    truncated["apiResponse"]["nextPageToken"] = "next"
+    for module in ALL_MODULES:
+        assert_not_evaluated(module, truncated)
+        assert_not_evaluated(module, json.dumps(truncated))

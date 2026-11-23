@@ -59,6 +59,9 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 # Schedule types that meet or exceed daily frequency
 DAILY_OR_BETTER = ['daily', 'hourly']
 
+# Cap on exception text copied into a reason, so a long error cannot flood a customer-facing line
+ERROR_TEXT_LIMIT = 200
+
 
 def evaluate(data):
     """Evaluate backup frequency across all policies from Resource Graph response.
@@ -127,11 +130,11 @@ def evaluate(data):
             "policiesFailingFrequency": policies_failing_frequency
         }
     except Exception as e:
-        return {"backupFrequency": None, "error": str(e)}
+        return {"backupFrequency": None, "error": str(e)[:ERROR_TEXT_LIMIT]}
 
 
 def transform(input):
-    """Evaluates whether all Azure backup policies meet daily minimum frequency."""
+    """True when at least one Azure backup policy meets daily or better frequency; the reason says how many do."""
     criteriaKey = "backupFrequency"
     try:
         if isinstance(input, str):
@@ -155,7 +158,16 @@ def transform(input):
         if result_value is None:
             fail_reasons.append(f"{criteriaKey} not evaluated: {eval_result.get('error', 'no backup policy data')}")
         elif result_value:
-            pass_reasons.append(f"All {extra_fields.get('policiesEvaluated', 0)} backup policies meet daily or better frequency")
+            # The verdict is True when at least one policy meets daily, so say how many do: "All" is
+            # true only when every policy evaluated meets it.
+            evaluated = extra_fields.get('policiesEvaluated', 0)
+            meeting = extra_fields.get('policiesMeetingFrequency', 0)
+            if not evaluated:
+                pass_reasons.append("The backup policy meets daily or better frequency")
+            elif meeting == evaluated:
+                pass_reasons.append(f"All {evaluated} backup policies meet daily or better frequency")
+            else:
+                pass_reasons.append(f"{meeting} of {evaluated} backup policies meet daily or better frequency")
         else:
             fail_reasons.append(f"{criteriaKey} check failed")
             if "error" in eval_result:
@@ -177,6 +189,6 @@ def transform(input):
         return create_response(
             result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            transformation_errors=[str(e)[:ERROR_TEXT_LIMIT]],
+            fail_reasons=[f"Transformation error: {str(e)[:ERROR_TEXT_LIMIT]}"]
         )
