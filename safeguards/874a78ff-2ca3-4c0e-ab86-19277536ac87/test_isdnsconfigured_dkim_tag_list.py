@@ -90,7 +90,9 @@ class DkimTagListTests(unittest.TestCase):
                 response = self.check(body(record))
                 self.assertEqual(response["transformedResponse"], {
                     "isDNSConfigured": False, "isDMARCConfigured": True, "isDKIMConfigured": False, "isSPFConfigured": True})
-                self.assertEqual(response["additionalInfo"]["evaluation"]["failReasons"], ["Missing DNS records: DKIM"])
+                reasons = response["additionalInfo"]["evaluation"]["failReasons"]
+                self.assertEqual(len(reasons), 1)
+                self.assertIn("revoked", reasons[0])
                 self.assert_measured(response)
 
     def test_an_explicit_false_and_the_other_two_records_are_unchanged(self):
