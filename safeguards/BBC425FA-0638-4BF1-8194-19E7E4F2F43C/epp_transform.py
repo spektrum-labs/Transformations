@@ -1,66 +1,61 @@
 """
-Transformation: epp_transform (comprehensive)
-Vendor: Endpoint Protection Platform
+Transformation: epp_transform
+Vendor: Arctic Wolf - EDR Endpoint Security (Aurora Endpoint Defense API)
 Category: Endpoint Security
 
-Evaluates safeguard types coverage based on endpoints response data
-and assigns a score from 0 to 100 for each safeguard type.
+NOT MEASURED. Every key below returns None with a dataCollection error, so it reads Unevaluated
+-- never Passed, never Failed.
+
+The Arctic Wolf - EDR Endpoint Security definition routes these keys to the
+`checkInstalled` method, which has no request defined in that definition (no url, no HTTP
+method), so no vendor body ever reaches this file.
+
+The parse this file carried was written for Sophos Central: it counted `assignedProducts`
+codes (endpointProtection, mtr, interceptX) and `health.services.serviceDetails`. The Aurora
+Device API (Get devices extended, GET /devices/v2) returns `products`, `policy`, `state` and
+`agent_version` per device and none of those Sophos fields, so an Aurora body would have
+read 0% coverage. `isEPPConfigured` was answered from a field of its own name. The keys are
+Unevaluated together because the evaluator reads one dataCollection status per response.
+
+What this file did before:
+Sophos-shaped coverage arithmetic, plus `isEPPConfigured` answered from
+`data["isEPPConfigured"]` or a non-empty-collection fallback.
+
+Docs: Aurora Endpoint Defense API, https://docs.arcticwolf.com/en/developer-and-oem/aurora-endpoint-defense-api
+(retrieved 2026-10-07).
 """
 
-import json
 from datetime import datetime
 
+KEYS = ("isEPPEnabled", "isEPPDeployed", "isEPPLoggingEnabled", "isEPPEnabledForCriticalSystems",
+        "isEDRDeployed", "isEndpointSecurityEnabled", "isMDREnabled", "isMDRLoggingEnabled",
+        "requiredCoveragePercentage", "requiredConfigurationPercentage", "isEPPConfigured")
 
-def extract_input(input_data):
-    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-        return input_data["data"], input_data["validation"]
-    data = input_data
-    if isinstance(data, dict):
-        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
-            unwrapped = False
-            for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
-                    data = data[key]
-                    unwrapped = True
-                    break
-            if not unwrapped:
-                break
-    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+REASON = ("Not measured: this integration's checkInstalled method calls no Aurora endpoint, and the "
+          "former parse read Sophos fields no Aurora API returns")
 
 
-def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
-    if validation is None:
-        validation = {"status": "unknown", "errors": [], "warnings": []}
+def create_response(result, api_errors, input_summary=None):
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
+                "status": "error" if api_errors else "success",
                 "errors": api_errors or []
             },
-            "validation": {
-                "status": validation.get("status", "unknown"),
-                "errors": validation.get("errors", []),
-                "warnings": validation.get("warnings", [])
-            },
-            "transformation": {
-                "status": "error" if (transformation_errors or []) else "success",
-                "errors": transformation_errors or [],
-                "inputSummary": input_summary or {}
-            },
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": input_summary or {}},
             "evaluation": {
-                "passReasons": pass_reasons or [],
-                "failReasons": fail_reasons or [],
-                "recommendations": recommendations or [],
-                "additionalFindings": additional_findings or []
+                "passReasons": [],
+                "failReasons": api_errors or [],
+                "recommendations": [],
+                "additionalFindings": []
             },
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "epp_transform",
-                "vendor": "Endpoint Protection Platform",
+                "vendor": "Arctic Wolf",
                 "category": "Endpoint Security"
             }
         }
@@ -68,225 +63,9 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def transform(input):
-    try:
-        if isinstance(input, str):
-            input = json.loads(input)
-        elif isinstance(input, bytes):
-            input = json.loads(input.decode("utf-8"))
-
-        data, validation = extract_input(input)
-
-        if validation.get("status") == "failed":
-            return create_response(
-                result={"isEPPEnabled": False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
-
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        # A DEFAULT OF True ON BOTH BRANCHES MEANT NOTHING COULD DISCONFIRM THIS. The line
-        # read `data.get("isEPPConfigured", True) if isinstance(data, dict) else True`, so a
-        # body missing the key reported endpoint protection CONFIGURED, and a body that was
-        # not a dict at all -- null, a bare string, an unparsed response -- did too, via the
-        # else. Measured 2026-09-21: transform(None) returned isEPPConfigured true across
-        # all six copies of this file. The key is absent from every real vendor payload
-        # this transform handles; it is a passthrough for a caller-supplied hint, and its
-        # absence is the normal case, which made True the answer almost every time.
-        #
-        # Absence of the hint is now resolved from what WAS read: endpoint protection is
-        # configured if any coverage was actually observed. An unreadable body observes
-        # nothing and is False.
-        if not isinstance(data, dict) or not data:
-            isEPPConfigured = False
-        elif "isEPPConfigured" in data:
-            isEPPConfigured = bool(data.get("isEPPConfigured"))
-        else:
-            isEPPConfigured = epp_coverage_observed(data)
-
-        items = data.get("items", []) if isinstance(data, dict) else []
-        total_endpoints = len(items)
-        total_computers = 0
-        total_servers = 0
-        total_mobile_devices = 0
-        total_cloud_endpoints = 0
-
-        safeguard_counters = {
-            "Endpoint Protection": 0,
-            "Endpoint Security": 0,
-            "Server Protection": 0,
-            "MDR": 0,
-            "Network Protection": 0,
-            "Cloud Security": 0,
-            "Mobile Protection": 0,
-            "Email Security": 0,
-            "Phishing Protection": 0,
-            "Zero Trust Network Access": 0,
-            "Encryption": 0
-        }
-
-        for endpoint in items:
-            assigned_products = {product["code"]: product for product in endpoint.get("assignedProducts", [])}
-            services = {service["name"]: service for service in endpoint.get("health", {}).get("services", {}).get("serviceDetails", [])}
-            endpoint_type = endpoint.get("type")
-
-            if endpoint_type == "computer":
-                total_computers += 1
-            elif endpoint_type == "server":
-                total_servers += 1
-            elif endpoint_type == "mobile":
-                total_mobile_devices += 1
-
-            if "cloud" in endpoint:
-                total_cloud_endpoints += 1
-
-            if endpoint_type == "computer" and "endpointProtection" in assigned_products:
-                safeguard_counters["Endpoint Protection"] = safeguard_counters["Endpoint Protection"] + 1
-                safeguard_counters["Endpoint Security"] = safeguard_counters["Endpoint Security"] + 1
-
-            if endpoint_type == "server" and "endpointProtection" in assigned_products:
-                safeguard_counters["Server Protection"] = safeguard_counters["Server Protection"] + 1
-
-            if "mtr" in assigned_products:
-                safeguard_counters["MDR"] = safeguard_counters["MDR"] + 1
-
-            if any("Network Threat Protection" in service_name for service_name in services):
-                safeguard_counters["Network Protection"] = safeguard_counters["Network Protection"] + 1
-
-            if endpoint.get("cloud", {}).get("provider") and "endpointProtection" in assigned_products:
-                safeguard_counters["Cloud Security"] = safeguard_counters["Cloud Security"] + 1
-
-            if endpoint_type == "mobile" and "mobileProtection" in assigned_products:
-                safeguard_counters["Mobile Protection"] = safeguard_counters["Mobile Protection"] + 1
-
-            if "emailSecurity" in assigned_products:
-                safeguard_counters["Email Security"] = safeguard_counters["Email Security"] + 1
-
-            if "interceptX" in assigned_products:
-                safeguard_counters["Phishing Protection"] = safeguard_counters["Phishing Protection"] + 1
-
-            ztna_product = assigned_products.get("ztna")
-            if ztna_product and ztna_product.get("status") == "installed":
-                safeguard_counters["Zero Trust Network Access"] = safeguard_counters["Zero Trust Network Access"] + 1
-
-            if endpoint.get("encryption", {}).get("volumes"):
-                safeguard_counters["Encryption"] = safeguard_counters["Encryption"] + 1
-
-        coverage_scores = {}
-
-        coverage_scores["Endpoint Protection"] = round(
-            (safeguard_counters["Endpoint Protection"] / total_computers) * 100
-            if total_computers > 0 else 0
-        )
-        coverage_scores["Endpoint Security"] = round(
-            (safeguard_counters["Endpoint Security"] / total_computers) * 100
-            if total_computers > 0 else 0
-        )
-        coverage_scores["Server Protection"] = round(
-            (safeguard_counters["Server Protection"] / total_servers) * 100
-            if total_servers > 0 else 0
-        )
-        coverage_scores["MDR"] = round(
-            (safeguard_counters["MDR"] / total_endpoints) * 100
-            if total_endpoints > 0 else 0
-        )
-        coverage_scores["Network Protection"] = round(
-            (safeguard_counters["Network Protection"] / total_endpoints) * 100
-            if total_endpoints > 0 else 0
-        )
-        coverage_scores["Cloud Security"] = round(
-            (safeguard_counters["Cloud Security"] / total_cloud_endpoints) * 100
-            if total_cloud_endpoints > 0 else 0
-        )
-        coverage_scores["Mobile Protection"] = round(
-            (safeguard_counters["Mobile Protection"] / total_mobile_devices) * 100
-            if total_mobile_devices > 0 else 0
-        )
-        coverage_scores["Email Security"] = round(
-            (safeguard_counters["Email Security"] / total_endpoints) * 100
-            if total_endpoints > 0 else 0
-        )
-        coverage_scores["Phishing Protection"] = round(
-            (safeguard_counters["Phishing Protection"] / total_endpoints) * 100
-            if total_endpoints > 0 else 0
-        )
-        coverage_scores["Zero Trust Network Access"] = round(
-            (safeguard_counters["Zero Trust Network Access"] / total_endpoints) * 100
-            if total_endpoints > 0 else 0
-        )
-        coverage_scores["Encryption"] = round(
-            (safeguard_counters["Encryption"] / total_endpoints) * 100
-            if total_endpoints > 0 else 0
-        )
-
-        coverage_scores["isEPPEnabled"] = coverage_scores["Endpoint Protection"] > 0
-        coverage_scores["isEPPDeployed"] = coverage_scores["Endpoint Protection"] > 0
-        coverage_scores["isEPPLoggingEnabled"] = coverage_scores["Endpoint Protection"] > 0
-        coverage_scores["isEPPEnabledForCriticalSystems"] = coverage_scores["Endpoint Protection"] > 0
-        coverage_scores["isEDRDeployed"] = coverage_scores["Endpoint Protection"] > 0
-        coverage_scores["isEndpointSecurityEnabled"] = coverage_scores["Endpoint Security"] > 0
-        coverage_scores["isMDREnabled"] = coverage_scores["MDR"] > 0
-        coverage_scores["isMDRLoggingEnabled"] = coverage_scores["MDR"] > 0
-        coverage_scores["requiredCoveragePercentage"] = coverage_scores["Endpoint Protection"]
-        coverage_scores["requiredConfigurationPercentage"] = coverage_scores["Endpoint Protection"]
-        coverage_scores["isEPPConfigured"] = isEPPConfigured
-
-        if coverage_scores["isEPPEnabled"]:
-            pass_reasons.append(f"Endpoint protection enabled: {coverage_scores['Endpoint Protection']}% coverage")
-        else:
-            fail_reasons.append("Endpoint protection not deployed or not reporting data")
-            recommendations.append("Deploy endpoint protection to all computers")
-
-        if coverage_scores["Server Protection"] > 0:
-            pass_reasons.append(f"Server protection: {coverage_scores['Server Protection']}% coverage")
-
-        if coverage_scores["isMDREnabled"]:
-            pass_reasons.append(f"MDR enabled: {coverage_scores['MDR']}% coverage")
-
-        return create_response(
-            result=coverage_scores,
-            validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            input_summary={
-                "totalEndpoints": total_endpoints,
-                "totalComputers": total_computers,
-                "totalServers": total_servers,
-                "safeguardCounters": safeguard_counters
-            }
-        )
-
-    except Exception as e:
-        return create_response(
-            result={"isEPPEnabled": False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
-
-
-def epp_coverage_observed(data):
-    """True when the payload actually evidences endpoint protection on something.
-
-    Deliberately narrow: it looks for a non-empty population of devices/agents/hosts, or
-    an explicit enabled/installed flag. An error envelope carries none of these, so it
-    resolves False rather than inheriting the old optimistic default.
-    """
-    if not isinstance(data, dict):
-        return False
-    for key in ("error", "errors", "errorMessage", "errorType", "fault"):
-        if data.get(key):
-            return False
-    for key in ("devices", "agents", "hosts", "endpoints", "resources", "items", "data"):
-        value = data.get(key)
-        if isinstance(value, list) and value:
-            return True
-        if isinstance(value, dict) and value:
-            return True
-    for key in ("isEnabled", "enabled", "installed", "protectionEnabled", "eppEnabled"):
-        if data.get(key) is True:
-            return True
-    return False
+    # No body can change this answer, so the body is not read: a value that is always None
+    # carries its error status with it, on every path including a body whose reads raise.
+    result = {}
+    for key in KEYS:
+        result[key] = None
+    return create_response(result, [REASON])
