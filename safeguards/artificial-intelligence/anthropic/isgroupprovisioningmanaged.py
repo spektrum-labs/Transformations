@@ -89,6 +89,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+CRITERION = "isGroupProvisioningManaged"
 METADATA = {
     "transformationId": "isGroupProvisioningManaged",
     "vendor": "Anthropic",
