@@ -1,35 +1,25 @@
 """
 Transformation: isPatchManagementEnabled
-Vendor: Arctic Wolf - EDR Endpoint Security (Aurora Endpoint Defense API)
+Vendor: Halcyon (Endpoint Security)
 Category: Patch Management
 
 NOT MEASURED. Every key below returns None with a dataCollection error, so it reads Unevaluated
 -- never Passed, never Failed.
 
-Not measurable from the vendor API: the requirement is document-only (L2) for this
-integration. Aurora Endpoint Security is endpoint protection. No Aurora Endpoint Defense API
-resource (User, Device, Global list, Policy, Zone, Threat, Memory protection, Detections,
-Package deployment, Device commands, Lockdown configurations) reports operating-system or
-application patch state or a patching policy.
-
-The Arctic Wolf - EDR Endpoint Security definition routes these keys to the
-`checkInstalled` method, which has no request defined in that definition (no url, no HTTP
-method), so no vendor body ever reaches this file.
+Halcyon's definition does not route a vendor body that answers these keys; not measured.
+In the definition the keys are wired to the `checkInstalled` method; this file does not read
+that response to answer them.
 
 What this file did before:
 `data.get('isPatchManagementEnabled', affirmative_signal(data))` and the same for
-isPatchManagementValid -- fields no Arctic Wolf API sends.
-
-Docs: Aurora Endpoint Defense API, https://docs.arcticwolf.com/en/developer-and-oem/aurora-endpoint-defense-api
-(retrieved 2026-10-07).
+isPatchManagementValid, self-answers from the body it was judging.
 """
 
 from datetime import datetime
 
 KEYS = ("isPatchManagementEnabled", "isPatchManagementValid")
 
-REASON = ("Not measured: Arctic Wolf Aurora is endpoint protection and its API reports no patch "
-          "management state, so this is document-only evidence for this integration")
+REASON = "Not measured: Halcyon's definition does not route a vendor body that answers this key"
 
 
 def create_response(result, api_errors, input_summary=None):
@@ -52,7 +42,7 @@ def create_response(result, api_errors, input_summary=None):
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "isPatchManagementEnabled",
-                "vendor": "Arctic Wolf",
+                "vendor": "Halcyon",
                 "category": "Patch Management"
             }
         }

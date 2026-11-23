@@ -1,31 +1,25 @@
 """
 Transformation: isIDPEnabled
-Vendor: Arctic Wolf - EDR Endpoint Security (Aurora Endpoint Defense API)
+Vendor: Halcyon (Endpoint Security)
 Category: Identity
 
 NOT MEASURED. Every key below returns None with a dataCollection error, so it reads Unevaluated
 -- never Passed, never Failed.
 
-Not measurable from the vendor API: the requirement is document-only (L2). The Aurora User API
-(Get user, GET /users/v2/{user_id}) returns role, zone, email and login dates for a console
-user; no field records single sign-on or an identity provider, and no other Aurora API
-resource publishes the console's SSO configuration. The definition also routes this key to
-`getIdentityProvider`, a method with no request defined.
+Halcyon's definition does not route a vendor body that answers this key; not measured.
+In the definition the key is wired to the `getIdentityProvider` method; this file does not
+read that response to answer it.
 
 What this file did before:
-`data.get('isSSOEnabled', affirmative_signal(data))` -- a field no Arctic Wolf API
-sends, so the answer was whatever affirmative_signal made of the body.
-
-Docs: Aurora Endpoint Defense API, https://docs.arcticwolf.com/en/developer-and-oem/aurora-endpoint-defense-api
-(retrieved 2026-10-07).
+`data.get('isSSOEnabled', affirmative_signal(data))`, a self-answer from the body it was
+judging.
 """
 
 from datetime import datetime
 
 KEYS = ("isSSOEnabled", "isSSOEnabledMDR")
 
-REASON = ("Not measured: the Arctic Wolf Aurora API publishes no SSO or identity-provider setting "
-          "(the User API carries roles, zones and login dates only), so this is document-only evidence")
+REASON = "Not measured: Halcyon's definition does not route a vendor body that answers this key"
 
 
 def create_response(result, api_errors, input_summary=None):
@@ -48,7 +42,7 @@ def create_response(result, api_errors, input_summary=None):
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "isIDPEnabled",
-                "vendor": "Arctic Wolf",
+                "vendor": "Halcyon",
                 "category": "Identity"
             }
         }
