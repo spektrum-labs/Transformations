@@ -1,0 +1,39 @@
+{
+  "name": "remediationVerifiedViaOneClickPercentage",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The percentage of weakness series NodeZero marks fixed, mitigated, resolved or remediated that it re-verified with one-click verify.",
+  "valueType": "number",
+  "unit": "percent",
+  "population": "Weakness series in the weakness series page for one NodeZero tenant whose status is MITIGATED, FIXED, RESOLVED or REMEDIATED; the denominator is that set, the numerator the ones with is_one_click_verify true.",
+  "polarity": "higher_is_better",
+  "evidenceRequiredForTrue": "A passing percentage needs closed series that report is_one_click_verify; a closed series without it counts as not re-verified, so it lowers the figure and never raises it.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "non_compliant",
+  "allowedCategories": [
+    "Threat & Vulnerability Management"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/threat-vulnerability-management/horizon3-nodezero/remediationVerifiedViaOneClickPercentage.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-17",
+      "change": "Registered so the Horizon3 NodeZero transforms can emit it; the meaning is what the transform reads, stated precisely. Unverified fields are named in notes."
+    }
+  ],
+  "notes": "Only the NodeZero transform emits this key today. Field names are as that transform reads them; they were not live-verified against a NodeZero tenant, so the key stays proposed at V0 with the owner not yet named. With no closed series the transform returns 0.0 with dataCollection status success, not null; that departs from the not-measured rule and is not yet corrected, so no requirement should gate on this key until it is."
+}

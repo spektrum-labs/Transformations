@@ -155,3 +155,36 @@ def test_pam_unreadable_or_contradictory_is_unevaluated():
 def test_pam_envelopes_and_string_booleans_agree():
     body = {"isActive": True, "isPam": True, "isPwm": False}
     assert run(P, {"apiResponse": body}) == run(P, json.dumps(body)) == run(P, {"isActive": "True", "isPam": "True"})
+
+
+# ---- isPAMEnabled output contract -----------------------------------------------------------------------
+def _pam_outputs():
+    mod = load(P)
+    bodies = [{"isActive": True, "isPam": True, "isPwm": False},     # True
+              {"isActive": True, "isPam": False, "isPwm": True},     # False
+              {"isActive": False, "isPam": True},                    # None, contradictory
+              {}, None, {"error": {"code": 403}}]                    # None, no evidence
+    return [mod.transform(b) for b in bodies]
+
+
+def test_pam_emits_only_the_criterion_and_never_a_vendor_field():
+    for out in _pam_outputs():
+        assert set(out["transformedResponse"]) == {P}
+        assert not {"isPam", "isPwm", "isActive"} & set(out["transformedResponse"])
+
+
+def test_pam_summary_keys_are_renamed_and_carry_the_vendor_values():
+    out = load(P).transform({"isActive": True, "isPam": False, "isPwm": True})
+    summary = out["additionalInfo"]["transformation"]["inputSummary"]
+    assert summary == {"privilegedAccessActivated": False, "tenantActive": True, "passwordVaultActivated": True}
+
+
+def test_pam_does_not_read_its_own_answer_out_of_the_body():
+    import sys
+    tools = HERE.parents[2] / "tools"
+    sys.path.insert(0, str(tools))
+    try:
+        from check_no_self_answer import answered_and_read
+    finally:
+        sys.path.remove(str(tools))
+    assert answered_and_read((HERE / (P + ".py")).read_text()) == set()

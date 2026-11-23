@@ -16,17 +16,22 @@
 
 import json
 import re
+from datetime import datetime, timezone
+
+KEY = "isDeletionRetentionPeriodEnforced"
+METHOD = "getRetentionConfig"
 
 
-def transform(input):
+def transform_bare(input):
     """
     True when every cloud connector's effective snapshot retention is at least one month
     (30 days), so an item deleted at the source stays recoverable for at least that long.
 
     Proves: the retention Keepit applies to each connector, read from Keepit's own
-    configuration. Does not prove: that a given item was ever backed up. A connector with no
-    readable retention, a retention that is not an ISO 8601 duration, or an unreadable body
-    answers false.
+    configuration. Does not prove: that a given item was ever backed up. A connector below the
+    minimum, or an account with no cloud connectors, answers false. A connector with no
+    readable retention (and none below the minimum), a retention that is not an ISO 8601
+    duration, or an unreadable body answers None (not measured).
     """
     key = "isDeletionRetentionPeriodEnforced"
 
@@ -143,13 +148,13 @@ def transform(input):
         if short:
             return False, str(len(short)) + " of " + str(len(rows)) + " cloud connectors keep snapshots for less than " + label
         if unknown:
-            return False, str(len(unknown)) + " of " + str(len(rows)) + " cloud connectors have no readable retention (missing or not an ISO 8601 duration)"
+            return None, str(len(unknown)) + " of " + str(len(rows)) + " cloud connectors have no readable retention (missing or not an ISO 8601 duration)"
         return True, "All " + str(len(rows)) + " cloud connectors keep snapshots for at least " + label
 
     try:
         rows, problem = retention_rows(input)
         if rows is None:
-            return {key: False, "reason": problem}
+            return {key: None, "reason": problem}
         result, reason = judge(rows, 30, "one month (30 days)")
         return {
             key: result,
@@ -158,4 +163,34 @@ def transform(input):
             "connectors": rows,
         }
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return {key: None, "error": str(e)}
+
+
+def envelope(key, method, bare):
+    """Wrap a bare result in the platform envelope.
+
+    Whether the criterion was measured is read from its value alone: None means the body could
+    not answer the check, so dataCollection reports an error and Token-Service does not grade
+    it. Every other value, including a measured False, reports success.
+    """
+    value = bare.get(key)
+    reason = str(bare.get("reason") or bare.get("error") or "The response could not answer this check")
+    measured = value is not None
+    passed = value is True or value == "confirmed"
+    return {
+        "transformedResponse": bare,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Keepit", "product": "Keepit", "method": method,
+                         "evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "2.0"},
+        },
+    }
+
+
+def transform(input):
+    """transform_bare() in the platform envelope; a None criterion reports a dataCollection error."""
+    return envelope(KEY, METHOD, transform_bare(input))

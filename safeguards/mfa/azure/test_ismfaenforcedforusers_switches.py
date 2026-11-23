@@ -109,7 +109,9 @@ def test_require_all_users_on_sets_group_policies_aside():
 @pytest.mark.parametrize("users,expect", [
     ({"excludeUsers": ["b0000000-0000-0000-0000-000000000001", "b0000000-0000-0000-0000-000000000002"]}, True),
     ({"excludeUsers": ["b0000000-0000-0000-0000-00000000000" + str(i) for i in range(3)]}, False),
-    ({"excludeGroups": [G1]}, False),
+    ({"excludeGroups": [G1]}, True),  # row 36B (c), decision 18 Oct 2026: one break-glass group
+    ({"excludeGroups": [G1, "c0000000-0000-0000-0000-000000000002"]}, False),
+    ({"excludeGroups": [G1], "excludeUsers": ["b0000000-0000-0000-0000-000000000001"]}, False),
     ({"excludeRoles": ["d0000000-0000-0000-0000-000000000001"]}, False),
     ({"excludeGuestsOrExternalUsers": {"guestOrExternalUserTypes": "b2bCollaborationGuest"}}, False),
     ({"excludeUsers": ["GuestsOrExternalUsers"]}, False),
@@ -194,8 +196,11 @@ def test_unevaluated_mode_reads_group_only_coverage_as_not_evaluated():
 
 
 def test_unevaluated_mode_all_users_with_excluded_group_is_not_evaluated():
-    out = run(load(ALL_USERS_TARGET_MODE="unevaluated"), body(policy("MFA all users", excludeGroups=[G1])))
+    # Row 36B (c), decision 18 Oct 2026: one excluded group is break-glass (Met); two are not.
+    m = load(ALL_USERS_TARGET_MODE="unevaluated")
+    out = run(m, body(policy("MFA all users", excludeGroups=[G1, "c0000000-0000-0000-0000-000000000002"])))
     assert out["transformedResponse"][KEY] is None
+    assert run(m, body(policy("MFA all users", excludeGroups=[G1])))["transformedResponse"][KEY] is True
 
 
 def test_unevaluated_mode_still_passes_and_fails_where_it_can():

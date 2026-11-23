@@ -1,0 +1,43 @@
+{
+  "name": "staleProtectionJobsCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of devices whose backup job is stale: backup_status is Failed, Offline, Blocked, Cancelled or Suspended, next_backup is in the past, or no backup timestamp is recorded. An error, refusal, empty device list, or any device with no backup_status, last_backup or next_backup is Not evaluated, never 0.",
+  "valueType": "integer",
+  "unit": "count",
+  "domain": {
+    "min": 0
+  },
+  "population": "the devices the credential's company returns from the device summary; numerator = devices judged stale",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "A read of the device summary in which every device carries a backup_status, last_backup or next_backup; 0 only when none of them is stale. An error, refusal, empty or partial read is Not evaluated.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Backups"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/backups/idrive/staleProtectionJobsCount.py",
+    "safeguards/backups/idrive/test_not_measured_backups_idrive.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real IDrive body replayed yet, so V0)."
+    }
+  ],
+  "notes": "A device record with none of backup_status, last_backup and next_backup is unreadable, not healthy; one such record makes the whole count null with a dataCollection error. An unparseable next_backup is not read as overdue."
+}

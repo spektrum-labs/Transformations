@@ -1,42 +1,55 @@
-"""Transformation: openHighSeverityVulnerabilitiesCount (SentinelOne Singularity Vulnerability Management, method getApplicationRisks).
+"""Transformation: openHighSeverityVulnerabilitiesCount (SentinelOne Singularity Vulnerability Management, vendor counts).
 
 Vendor: SentinelOne  |  Category: Endpoint Security  |  Integration: SentinelOne (2bc425fa)
-Same keys and meaning as safeguards/epp/crowdstrike-falcon/*FromSpotlight.py and
-safeguards/7BC425FA-0638-4BF1-8194-19E7E4F2F43C/microsoft_endpoint_vulnerabilities.py, so bundles compare
-SentinelOne, Falcon and Defender tenants the same way.
+Same keys as safeguards/epp/crowdstrike-falcon/*FromSpotlightCounts.py and
+safeguards/7BC425FA-0638-4BF1-8194-19E7E4F2F43C/microsoft_endpoint_vulnerabilities.py; the unit differs: one
+SentinelOne application risk row (CVE x endpoint x application), so a count is at least SentinelOne's own
+CVE-on-endpoint count (one row per affected application) and is not directly comparable with Falcon/Defender totals.
 
-Input: getApplicationRisks, GET /web/api/v2.1/application-management/risks scoped like getEndpoints, paged by
-IS on pagination.nextCursor (cursor), pages merged into `data`, the first page's pagination block kept
-(totalItems; `truncated` when maxPages stopped it). One record is one CVE on one endpoint for one installed
-application (public schema: cveId, severity, endpointId, detectionDate, mitigationStatus, daysDetected; the
-snake_case spellings are accepted too). Records are de-duplicated on (endpointId, cveId), keeping the earliest
-detectionDate, so one counted instance is one CVE on one endpoint -- the Falcon Spotlight unit.
+WHY COUNTS AND NOT ROWS. The earlier version paged every row of GET /web/api/v2.1/application-management/risks
+(1000 per page, at most 50 pages). Large tenants hold several hundred thousand rows, so the read stopped at the page
+cap and all three keys were Unevaluated. SentinelOne answers the question itself: the same endpoint with
+countOnly=true returns pagination.totalItems for the filter, over the whole scope, without rows.
+
+Input: the getApplicationRiskCounts workflow output, one block per step (IS merge + output.key), each the vendor body
+{"data": [...], "pagination": {"totalItems": N, ...}} of GET .../application-management/risks?<scope>&countOnly=true:
+  allRisks         no severity filter (every risk row in scope)
+  critical         severities=CRITICAL
+  high             severities=HIGH
+  overdueCritical  severities=CRITICAL&detectionDate__lt={$utcNow-15d}
+  overdueHigh      severities=HIGH&detectionDate__lt={$utcNow-30d}
+  beforeNow        detectionDate__lt={$utcNow} (date-filter control: every listed row was detected before now)
+(IS's {$utcNow-Nd} is the call time minus N days, RFC 3339 UTC.) One row is one CVE on one endpoint for one
+installed application, so a count is a number of those rows.
 
 Numbers emitted (every file emits all three, its own key first):
-  openCriticalVulnerabilitiesCount         instances with severity Critical
-  openHighSeverityVulnerabilitiesCount     instances with severity High
-  overdueCriticalHighVulnerabilitiesCount  of those, Critical first detected more than 15 days ago or High more
-                                           than 30 days ago (CISA BOD 19-02 windows, as for Falcon and Defender)
-A record whose mitigation status says fixed, resolved, remediated or patched is not open. Any other status
-(including an acknowledged risk) is still open.
+  openCriticalVulnerabilitiesCount         critical total
+  openHighSeverityVulnerabilitiesCount     high total
+  overdueCriticalHighVulnerabilitiesCount  overdueCritical + overdueHigh (CISA BOD 19-02 windows: critical first
+                                           detected more than 15 days ago, high more than 30 days ago)
+Status: the counts take every row SentinelOne lists for the severity. No status filter is applied (none is verified
+for this endpoint), so a row the vendor still lists after a fix would be counted. That can only raise a count, never
+turn a failing tenant into a passing one.
 
-Fail closed: anything that is not a complete risks read returns all three keys as None with dataCollection
-"error" (Unevaluated): no envelope, a vendor error (an unlicensed tenant or a role without the
-Application Management permission answers 403), no data list, no pagination block, a non-numeric totalItems,
-a nextCursor left, a truncated merge, fewer records than totalItems, an EMPTY risk list (a tenant without the
-Vulnerability Management licence can answer an empty list, so empty is not a measured zero), or a record
-without a severity -- or, for a Critical/High record, without endpointId, cveId or a readable detectionDate.
+Fail closed: anything that is not six complete, consistent vendor counts returns all three keys as None with
+dataCollection "error" (Unevaluated): no envelope, an IS or vendor error (an unlicensed tenant or a role without the
+Application Management permission answers 403), a missing block, a block without a whole-number
+pagination.totalItems, an allRisks total of 0 (a tenant without the Vulnerability Management licence can answer an
+empty list, so zero rows is not a measured zero), or counts that disagree: critical + high above allRisks (a
+severity filter the vendor ignored), an overdue count above its open count (a date filter that widened the set), or
+a beforeNow count of 0 (the vendor read the {$utcNow} timestamp form as a date before every detection, so the overdue
+cutoffs, written the same way, cannot be trusted to be non-zero). The severity values are SentinelOne's uppercase
+enum, confirmed against a live tenant: a misspelt value answers 0, which these checks cannot tell from a clean tenant.
 """
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 
 KEY = "openHighSeverityVulnerabilitiesCount"
 KEY_CRITICAL = "openCriticalVulnerabilitiesCount"
 KEY_HIGH = "openHighSeverityVulnerabilitiesCount"
 KEY_OVERDUE = "overdueCriticalHighVulnerabilitiesCount"
-CRITICAL_DAYS = 15
-HIGH_DAYS = 30
-CLOSED_STATUSES = ["fixed", "resolved", "remediated", "patched"]
+BLOCKS = ["allRisks", "critical", "high", "overdueCritical", "overdueHigh", "beforeNow"]
+WRAPPERS = ["data", "result", "response", "apiResponse", "api_response", "_response_data", "Output"]
 META = {"transformationId": KEY, "vendor": "SentinelOne", "category": "epp"}
 
 
@@ -49,92 +62,115 @@ def parse(value):
     return value
 
 
-def pick(record, names):
-    for n in names:
-        if n in record and record.get(n) not in (None, "", "None", "null"):
-            return record.get(n)
+def error_of(obj):
+    """The error a wrapper or vendor body reports, or None."""
+    error = obj.get("error")
+    error_set = error is True or (not isinstance(error, bool) and bool(error))  # True, a message, or an error object
+    if obj.get("errors") or error_set or obj.get("stepError") is True:
+        inner = obj.get("apiResponse")
+        inner_message = inner.get("errorMessage") if isinstance(inner, dict) else None
+        return json.dumps(obj.get("errors") or obj.get("message") or obj.get("errorMessage")
+                          or (error if not isinstance(error, bool) else None) or inner_message or "error")[:300]
+    status = obj.get("statusCode") or obj.get("status_code")
+    if isinstance(status, str) and status.strip().isdigit():
+        status = int(status.strip())
+    if isinstance(status, int) and not isinstance(status, bool) and status >= 400:
+        return "HTTP " + str(status)
+    if str(obj.get("status") or "").strip().lower() in ("error", "failed"):
+        return "status " + str(obj.get("status"))
     return None
 
 
-def find_risk_list(obj):
-    """(records, pagination, error) from the getApplicationRisks response, whatever wrapper arrives."""
+def descend(obj, done):
+    """(dict, error): the first dict under the usual wrappers for which done(dict) holds; (None, None) if none."""
     cur = obj
     for depth in range(6):
         try:
             cur = parse(cur)
         except Exception:
-            return None, None, None
-        if isinstance(cur, list):
-            return None, None, None
+            return None, None
         if not isinstance(cur, dict):
-            return None, None, None
-        if cur.get("errors") or cur.get("error") is True:
-            detail = cur.get("errors") or cur.get("message") or cur.get("errorMessage") or "error"
-            return None, None, json.dumps(detail)[:300]
-        status = cur.get("statusCode") or cur.get("status_code")
-        if isinstance(status, int) and status >= 400:
-            return None, None, "HTTP " + str(status)
-        if isinstance(cur.get("data"), list):
-            pagination = cur.get("pagination")
-            return cur["data"], (pagination if isinstance(pagination, dict) else None), None
+            return None, None
+        error = error_of(cur)
+        if error is not None:
+            return None, error
+        if done(cur):
+            return cur, None
         nxt = None
-        for key in ["data", "result", "response", "apiResponse", "api_response", "_response_data", "Output"]:
+        for key in WRAPPERS:
             if isinstance(cur.get(key), (dict, str, bytes)):
                 nxt = cur.get(key)
                 break
         if nxt is None:
-            return None, None, None
+            return None, None
         cur = nxt
-    return None, None, None
+    return None, None
+
+
+def has_block(obj):
+    return any(name in obj for name in BLOCKS)
+
+
+def has_pagination(obj):
+    return "pagination" in obj
 
 
 def to_count(value):
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
-        return value
+        return value if value >= 0 else None
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     return None
 
 
-def parse_when(value):
-    try:
-        # strptime imports _strptime, which the Token-Service sandbox refuses.
-        return datetime.fromisoformat(str(value)[:19])
-    except Exception:
-        return None
-
-
-def complete_read(raw):
-    records, pagination, error = find_risk_list(raw)
+def block_total(name, block):
+    """(total, None) for one vendor count, or (None, problem)."""
+    body, error = descend(block, has_pagination)
     if error is not None:
-        return None, "SentinelOne returned an error instead of the application risks list: " + error
-    if records is None:
-        return None, "No SentinelOne application risks list in the response; nothing to evaluate."
-    if pagination is None:
-        return None, "The risks list carries no pagination block, so a complete read cannot be shown."
-    total = to_count(pagination.get("totalItems"))
-    if total is None or total < 0:
-        return None, "pagination.totalItems is missing or not a whole number, so a complete read cannot be shown."
-    records = [r for r in records if isinstance(r, dict)]
-    if pagination.get("truncated") is True or str(pagination.get("truncated")).lower() == "true":
-        return None, "Read stopped at the page limit (" + str(len(records)) + " of " + str(total) + "); a partial read is not counted."
-    if str(pagination.get("nextCursor") or "").strip() not in ("", "None", "null"):
-        return None, "More pages remain (nextCursor present); a partial read is not counted."
-    if len(records) < total:
-        return None, "Read " + str(len(records)) + " of " + str(total) + " risk records; a partial read is not counted."
-    if not records:
-        return None, ("SentinelOne returned no application risks. A tenant without the Vulnerability Management "
+        return None, "SentinelOne returned an error for the " + name + " risk count: " + error
+    if body is None:
+        return None, "The " + name + " risk count is missing; the workflow did not deliver every count."
+    pagination = body.get("pagination")
+    total = to_count(pagination.get("totalItems")) if isinstance(pagination, dict) else None
+    if total is None:
+        return None, "The " + name + " risk count has no whole-number pagination.totalItems; nothing was measured."
+    return total, None
+
+
+def measure(raw):
+    """(totals, None) for six complete, consistent counts, or (None, problem)."""
+    blocks, error = descend(raw, has_block)
+    if error is not None:
+        return None, "SentinelOne returned an error instead of the application risk counts: " + error
+    if blocks is None:
+        return None, "No SentinelOne application risk counts in the response; nothing to evaluate."
+    totals = {}
+    for name in BLOCKS:
+        total, problem = block_total(name, blocks.get(name))
+        if problem:
+            return None, problem
+        totals[name] = total
+    if totals["allRisks"] == 0:
+        return None, ("SentinelOne reports no application risks. A tenant without the Vulnerability Management "
                       "licence can answer an empty list, so this is not a measured zero.")
-    return records, None
+    if totals["critical"] + totals["high"] > totals["allRisks"]:
+        return None, ("SentinelOne counts disagree: " + str(totals["critical"]) + " critical + " + str(totals["high"])
+                      + " high is more than the " + str(totals["allRisks"]) + " risks in scope; not scored.")
+    if totals["overdueCritical"] > totals["critical"] or totals["overdueHigh"] > totals["high"]:
+        return None, "SentinelOne counts disagree: an overdue count exceeds its open count; not scored."
+    if totals["beforeNow"] == 0:
+        return None, ("SentinelOne counts no risk detected before now although " + str(totals["allRisks"])
+                      + " are in scope: the detection-date filter was not read as intended; not scored.")
+    return totals, None
 
 
-def unevaluated(problem, validation=None):
+def unevaluated(problem):
     return respond({KEY: None, KEY_CRITICAL: None, KEY_HIGH: None, KEY_OVERDUE: None}, problem=problem)
 
 
-def respond(result, problem=None, pass_reasons=None, fail_reasons=None, findings=None, summary=None):
+def respond(result, problem=None, pass_reasons=None, fail_reasons=None, summary=None):
     ordered = {KEY: result.get(KEY)}
     for k in result:
         if k != KEY:
@@ -152,9 +188,9 @@ def respond(result, problem=None, pass_reasons=None, fail_reasons=None, findings
                 "recommendations": [] if problem or not fail_reasons else [
                     "Patch or remove the vulnerable applications, critical first; clear critical findings older than "
                     "15 days and high older than 30 days."],
-                "additionalFindings": findings or [],
+                "additionalFindings": [],
             },
-            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "2.0",
+            "metadata": {"evaluatedAt": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z", "schemaVersion": "2.0",
                          "transformationId": META["transformationId"], "vendor": META["vendor"],
                          "category": META["category"]},
         },
@@ -164,56 +200,17 @@ def respond(result, problem=None, pass_reasons=None, fail_reasons=None, findings
 def transform(input):
     try:
         raw = input.get("data") if isinstance(input, dict) and "validation" in input else input
-        records, problem = complete_read(raw)
+        totals, problem = measure(raw)
         if problem:
             return unevaluated(problem)
-        now = datetime.utcnow()
-        instances = {}
-        closed = 0
-        for r in records:
-            severity = str(pick(r, ["severity", "cveSeverity", "cve_severity"]) or "").strip().lower()
-            if not severity:
-                return unevaluated("A risk record has no severity, so the counts cannot be trusted.")
-            status = str(pick(r, ["mitigationStatus", "mitigation_status", "status"]) or "").strip().lower()
-            if status in CLOSED_STATUSES:
-                closed = closed + 1
-                continue
-            if severity not in ("critical", "high"):
-                continue
-            endpoint = pick(r, ["endpointId", "endpoint_id", "agentId", "agent_id"])
-            cve = pick(r, ["cveId", "cve_id"])
-            when = parse_when(pick(r, ["detectionDate", "detection_date"]))
-            if endpoint is None or cve is None or when is None:
-                return unevaluated("A " + severity + " risk record lacks endpointId, cveId or a readable detectionDate.")
-            ident = str(endpoint) + "|" + str(cve).upper()
-            prior = instances.get(ident)
-            if prior is None or when < prior[1]:
-                instances[ident] = (severity, when)
-        critical = 0
-        high = 0
-        overdue = 0
-        for ident in instances:
-            severity, when = instances[ident]
-            age = now - when
-            if severity == "critical":
-                critical = critical + 1
-                if age > timedelta(days=CRITICAL_DAYS):
-                    overdue = overdue + 1
-            else:
-                high = high + 1
-                if age > timedelta(days=HIGH_DAYS):
-                    overdue = overdue + 1
-        counts = {KEY_CRITICAL: critical, KEY_HIGH: high, KEY_OVERDUE: overdue}
-        result = {KEY: counts[KEY]}
-        for k in counts:
-            result[k] = counts[k]
-        result["riskRecordsRead"] = len(records)
-        line = (str(critical) + " open critical and " + str(high) + " open high CVE-on-endpoint instances; " +
-                str(overdue) + " past the 15/30-day window (" + str(len(records)) + " risk records read, " +
-                str(closed) + " marked fixed)")
-        summary = {"riskRecordsRead": len(records), "closedRecords": closed, "criticalHighInstances": len(instances)}
+        counts = {KEY_CRITICAL: totals["critical"], KEY_HIGH: totals["high"],
+                  KEY_OVERDUE: totals["overdueCritical"] + totals["overdueHigh"]}
+        line = (str(counts[KEY_CRITICAL]) + " critical and " + str(counts[KEY_HIGH]) + " high application risks; "
+                + str(counts[KEY_OVERDUE]) + " past the window (" + str(totals["overdueCritical"])
+                + " critical > 15 days, " + str(totals["overdueHigh"]) + " high > 30 days), from SentinelOne's counts "
+                + "over " + str(totals["allRisks"]) + " risks in scope")
         if counts[KEY] == 0:
-            return respond(result, pass_reasons=[line], summary=summary)
-        return respond(result, fail_reasons=[line], summary=summary)
+            return respond(counts, pass_reasons=[line], summary=totals)
+        return respond(counts, fail_reasons=[line], summary=totals)
     except Exception as e:
         return unevaluated("Transformation error: " + str(e))

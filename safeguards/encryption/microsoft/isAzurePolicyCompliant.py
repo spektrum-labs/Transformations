@@ -120,10 +120,26 @@ def evaluate(data, validation):
         return respond(None, "Unexpected value shape in the policy states response", validation)
     count = data.get("@odata.count")
     total = count if isinstance(count, int) and not isinstance(count, bool) else len(states)
-    extra = {"nonCompliantPolicyStates": max(total, len(states))}
-    if total > 0 or len(states) > 0:
-        return respond(False, str(max(total, len(states))) + " non-compliant policy state(s) for the vault",
+    # A row counts as non-compliant only when it says so; the call may or may not carry a
+    # complianceState filter, so a listed row that states nothing is not evidence either way.
+    noncompliant = 0
+    unstated = 0
+    for row in states:
+        if not isinstance(row, dict):
+            return respond(None, "A policy state row is not an object", validation)
+        if row.get("complianceState") == "NonCompliant" or row.get("isCompliant") is False:
+            noncompliant = noncompliant + 1
+        elif row.get("complianceState") is None and row.get("isCompliant") is None:
+            unstated = unstated + 1
+    if not states and total > 0:
+        noncompliant = total
+    extra = {"nonCompliantPolicyStates": noncompliant, "policyStateRowsWithoutState": unstated}
+    if noncompliant > 0:
+        return respond(False, str(noncompliant) + " non-compliant policy state(s) for the vault",
                        validation, extra, ["Remediate the non-compliant Azure Policy assignments on the vault"])
+    if unstated > 0:
+        return respond(None, str(unstated) + " policy state row(s) carry neither complianceState nor isCompliant, "
+                       "so compliance cannot be read", validation, extra)
     return respond(True, "No Azure Policy assignment reports the vault non-compliant", validation, extra)
 
 

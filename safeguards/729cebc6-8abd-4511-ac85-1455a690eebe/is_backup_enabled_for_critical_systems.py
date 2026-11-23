@@ -32,12 +32,17 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, missing field, transform raised) and must not be graded.
+    value = result.get("isBackupEnabledForCriticalSystems") if isinstance(result, dict) else None
+    measured = value is not None
+    not_measured_reasons = api_errors or transformation_errors or fail_reasons or ["isBackupEnabledForCriticalSystems could not be measured from the response"]
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else not_measured_reasons
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -79,7 +84,7 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
@@ -88,6 +93,12 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
+        if not isinstance(data, dict):
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                fail_reasons=["isBackupEnabledForCriticalSystems not evaluated: response is not an object"]
+            )
         dbBackups = data.get("dbBackups", {})
         dbManualSnapshots = data.get("dbManualSnapshots", {})
 
@@ -95,6 +106,7 @@ def transform(input):
         auto_resp = dbBackups.get("DescribeDBInstanceAutomatedBackupsResponse", {})
         auto_res = auto_resp.get("DescribeDBInstanceAutomatedBackupsResult", {})
         auto_group = auto_res.get("DBInstanceAutomatedBackups", {})
+        auto_measured = isinstance(auto_res, dict) and "DBInstanceAutomatedBackups" in auto_res
         auto_list = []
         if isinstance(auto_group, dict) and "DBInstanceAutomatedBackup" in auto_group:
             entry = auto_group["DBInstanceAutomatedBackup"]
@@ -105,7 +117,17 @@ def transform(input):
         # Manual snapshots
         man_resp = dbManualSnapshots.get("DescribeDBSnapshotsResponse", {})
         man_res = man_resp.get("DescribeDBSnapshotsResult", {})
-        man_group = man_res.get("DBSnapshots", {}).get("DBSnapshot", [])
+        man_measured = isinstance(man_res, dict) and "DBSnapshots" in man_res
+        if not auto_measured and not man_measured:
+            # Neither the automated-backup list nor the snapshot list is in the response
+            # (empty body, refusal, error envelope): nothing was measured.
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                fail_reasons=["isBackupEnabledForCriticalSystems not evaluated: no automated backup or snapshot list in the response"]
+            )
+        snaps = man_res.get("DBSnapshots") if isinstance(man_res, dict) else None
+        man_group = snaps.get("DBSnapshot", []) if isinstance(snaps, dict) else []
         manual_list = man_group if isinstance(man_group, list) else [man_group] if isinstance(man_group, dict) else []
 
         # Combine and check
@@ -133,7 +155,7 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]

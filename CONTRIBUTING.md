@@ -38,7 +38,7 @@ this transformation does not recognise, the answer is `False` — not `True`, an
 This is enforced in CI. `.github/workflows/transform-contract.yml` runs
 `tools/check_fail_closed.py` on every pull request and on every push to `develop`,
 `staging` and `main`. It hands each `transform()` a set of bodies that contain **no
-evidence about any estate** and fails the build if **any** key comes back `True` -- or
+evidence about any environment** and fails the build if **any** key comes back `True` -- or
 any inverted key (below) comes back `False`. Every key is judged, whatever its name: the
 gate used to judge only keys shaped `^(confirmed|is|are|has)[A-Z]`, and ten live rubber
 stamps (`authTypesAllowed`, `confirmPasswordPolicyEnforced`, `keysHaveExpirationDate`, ...)
@@ -103,7 +103,7 @@ Require the response to carry a signal the transformation actually reads, and sa
 # The query must be shown to have run before its result can be read as evidence.
 if not (isinstance(data, dict) and isinstance(data.get("findings"), list)):
     return create_response(
-        result={criteriaKey: False},
+        result={criteriaKey: None},
         validation=validation,
         api_errors=["no findings collection in the response: the query cannot be "
                     "shown to have run, so a count of zero is not evidence"])
@@ -112,6 +112,78 @@ if not (isinstance(data, dict) and isinstance(data.get("findings"), list)):
 A **proven** empty result set is different from silence, and is allowed to pass where
 that is the right reading — `{"findings": []}` may legitimately mean "we looked and
 there are none". `{}` may not.
+
+### Azure Resource Graph: zero rows is not a proven empty set
+
+The paragraph above is the general rule. **Azure Resource Graph is the named exception
+to it: an empty `rows` array is silence, not a proven empty set, and must be reported as
+not measured.**
+
+Resource Graph is RBAC-scoped, and
+[Microsoft's own documentation](https://learn.microsoft.com/en-us/azure/governance/resource-graph/overview#permissions-in-azure-resource-graph)
+says why zero rows cannot be read as zero resources:
+
+> No results are returned if you don't have at least `read` permissions to the Azure
+> object or object group. [...] If the user has access to any of the subscriptions in the
+> list, the query results are returned for the subscriptions the user has access to.
+> **This behavior is the same as when calling Resource Groups - List because you get
+> resource groups that you can access, without any indication that the result might be
+> partial.** If there are no subscriptions in the subscription list that the user has
+> appropriate rights to, the response is a *403* (Forbidden).
+
+So a `200` with `rows: []` means one of two things, and the response carries nothing that
+tells them apart:
+
+* the readable scope genuinely holds no such resource -- a real red; or
+* the vaults are in a subscription this principal cannot read -- a permissions artefact.
+
+A wholly unreadable scope is a `403`, which these transforms already report as not
+measured. A *partially* readable scope is the dangerous case: it returns `200` with only
+the readable subset "without any indication that the result might be partial". Zero rows
+therefore cannot be shown to have covered the environment, and a read that did not cover the
+environment may not produce a measured answer.
+
+```python
+# YES. Resource Graph returns zero rows for resources the caller cannot read, and a
+# partially readable scope says so nowhere in the response, so empty is not "none".
+if not isinstance(rows, list) or not rows:
+    return create_response(
+        result={criteriaKey: None}, validation=validation,
+        api_errors=["no Resource Graph rows in the response: zero rows is also what an "
+                    "unreadable subscription returns, so it is not evidence of none"])
+```
+
+**This applies to Resource Graph only.** An Azure *ARM* list endpoint -- `{"value": []}`
+from `backupProtectedItems`, `restoreJobs` or `diagnosticSettings` -- answers `403` on a
+scope the caller cannot read, so its empty list *is* a proven empty set and stays a
+measured `False`. Do not propagate this exception to ARM readers; the two are
+distinguished by which API produced the body, not by the body looking empty.
+
+**The census is enforced, not sampled.** A transform counts as a Resource Graph reader
+when it names Resource Graph *and* reads a `"rows"` key -- the pair is what separates the
+twelve Azure files from Datto BCDR, whose own envelope also carries `data.rows`, and from
+the EPP checks, which merely list `"rows"` among candidate container keys.
+`test_no_resource_graph_reader_is_missing_from_this_list`, in
+`safeguards/729cebc6-8abd-4511-ac85-1455a690eebe/test_not_measured_backups_azure_729.py`,
+walks the tree and fails if a reader exists that the rule's test table does not drive. Add
+a reader and that test makes you decide what it does with zero rows.
+
+Two consequences are deliberate and worth stating.
+
+A criterion whose only negative signal was "zero rows" can now answer only `True` or
+not-measured. `isBackupEnabled` is that criterion, in both its copies
+(`safeguards/729cebc6-8abd-4511-ac85-1455a690eebe/` and `safeguards/backups/azure/`).
+That is a real loss of a red, accepted because the red it replaced was indistinguishable
+from a permissions artefact. The way to earn it back is to make the workflow send an
+explicit `subscriptions` list and compare it with what came back, which is a workflow
+change, not a transformation change.
+
+`safeguards/backups/azure/is_backup_encrypted.py` also lost a `totalRecords` fallback that
+stood where the zero-rows guard now is. `totalRecords` is Resource Graph's own count of
+matched records, so zero there carries exactly the ambiguity above; and the other branch
+asserted `isBackupEncrypted` `True` from `totalRecords > 0` alone, which is a count of
+vaults, not a reading of any vault's encryption. Both branches are gone rather than left
+reachable.
 
 ### Two exceptions, both narrow
 
@@ -237,10 +309,12 @@ def transform(input):
 
         # 3. Handle validation failures
         if validation.get("status") == "failed":
+            reasons = validation.get("errors") or ["Input validation failed"]
             return create_response(
-                result={"isMFAEnforcedForUsers": False},
+                result={"isMFAEnforcedForUsers": None},
                 validation=validation,
-                fail_reasons=validation.get("errors", ["Input validation failed"])
+                api_errors=reasons,
+                fail_reasons=reasons
             )
 
         # 4. Apply business logic
@@ -259,14 +333,16 @@ def transform(input):
 
     except json.JSONDecodeError as e:
         return create_response(
-            result={"isMFAEnforcedForUsers": False},
+            result={"isMFAEnforcedForUsers": None},
             validation={"status": "error", "errors": [f"Invalid JSON: {str(e)}"], "warnings": []},
+            api_errors=["Could not parse input as valid JSON"],
             fail_reasons=["Could not parse input as valid JSON"]
         )
     except Exception as e:
         return create_response(
-            result={"isMFAEnforcedForUsers": False},
+            result={"isMFAEnforcedForUsers": None},
             transformation_errors=[str(e)],
+            api_errors=[f"Transformation error: {str(e)}"],
             fail_reasons=[f"Transformation error: {str(e)}"]
         )
 ```
@@ -551,19 +627,23 @@ echo '{"users": [{"userId": "1", "mfaEnabled": true}]}' | python local_tester.py
 
 ### Test Cases to Cover
 
-Cases 3 to 7 have a **required answer**, not merely required coverage: the criterion
-must come back `False` (or `True` for an [inverted key](#the-fail-closed-rule)). Listing
-the case without asserting the answer is how the defects in the fail-closed section got
-in.
+Cases 3 to 6 have a **required answer**, not merely required coverage: a body that
+cannot answer the criterion must come back **not evaluated** -- the criterion `None`,
+with `additionalInfo.dataCollection.status == "error"` (pass the reason in
+`api_errors`), which Token-Service shows grey. A `False` there is graded as a measured
+failure of a control nobody measured; see
+[A None verdict must say it was not measured](#a-none-verdict-must-say-it-was-not-measured).
+Listing the case without asserting the answer is how the defects in the fail-closed
+section got in.
 
 | # | case | input | required answer |
 |---|---|---|---|
 | 1 | Happy path | valid input, control in place | `True` |
 | 2 | Failure case | valid input, control absent | `False` |
-| 3 | Empty data | `{}`, `None`, `"{}"` | **`False`** |
-| 4 | API error | an error envelope, with and without an HTTP status code | **`False`** |
-| 5 | Unrelated payload | `{"hello": "world"}`, `{"foo": {"bar": [1, 2, 3]}}` | **`False`** |
-| 6 | Malformed JSON | invalid input format | **`False`** or raise |
+| 3 | Empty data | `{}`, `None`, `"{}"` | **`None`**, dataCollection `error` |
+| 4 | API error | an error envelope, with and without an HTTP status code | **`None`**, dataCollection `error` |
+| 5 | Unrelated payload | `{"hello": "world"}`, `{"foo": {"bar": [1, 2, 3]}}` | **`None`**, dataCollection `error` |
+| 6 | Malformed JSON | invalid input format | **`None`**, dataCollection `error`, or raise |
 | 7 | Legacy format | input without enriched validation | as case 1 or 2 |
 
 Case 5 is easy to skip and was missing from this guide, and from the contract itself,
@@ -599,8 +679,9 @@ def transform(input):
         )
     except Exception as e:
         return create_response(
-            result={"isMFAEnforcedForUsers": False},
+            result={"isMFAEnforcedForUsers": None},
             transformation_errors=[str(e)],
+            api_errors=[f"Error: {str(e)}"],
             fail_reasons=[f"Error: {str(e)}"]
         )
 ```
@@ -624,7 +705,7 @@ Before submitting a transformation:
 - [ ] Returns `create_response()` with all required fields
 - [ ] Handles JSON parse errors gracefully
 - [ ] Handles unexpected exceptions gracefully **without returning the criterion satisfied**
-- [ ] Returns `False` for an empty body, an error envelope (with and without a status code), and an unrelated payload — see [The fail-closed rule](#the-fail-closed-rule)
+- [ ] Returns the criterion as `None` with `dataCollection.status` `"error"` (not evaluated), never `False`, for an empty body, an error envelope (with and without a status code), an unrelated payload, and its own `except` path — see [A None verdict must say it was not measured](#a-none-verdict-must-say-it-was-not-measured)
 - [ ] Has at least one input that makes the criterion return `False`
 - [ ] `python3 tools/check_fail_closed.py` and `python3 tools/check_discriminates.py` both exit 0
 - [ ] Uses camelCase for criteria keys
