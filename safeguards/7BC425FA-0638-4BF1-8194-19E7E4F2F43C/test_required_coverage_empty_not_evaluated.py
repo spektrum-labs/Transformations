@@ -94,3 +94,13 @@ def test_failed_validation_is_not_evaluated():
 
 def test_exception_is_not_evaluated():
     assert_not_evaluated(load().transform(Poisoned()))
+
+
+@pytest.mark.parametrize("fleet", [200, 1000], ids=["199-of-200", "999-of-1000"])
+def test_coverage_does_not_round_up_to_a_pass(fleet):
+    """round() read 199 of 200 (99.5) and 999 of 1000 (99.9) as 100 and passed both."""
+    out = load().transform({"value": [machine() for _ in range(fleet - 1)] + [machine("CanBeOnboarded")]})
+    assert out["transformedResponse"][KEY] == 99
+    evaluation = out["additionalInfo"]["evaluation"]
+    assert evaluation["failReasons"] and "(99%)" in evaluation["failReasons"][0]
+    assert not any("All eligible" in r for r in evaluation["passReasons"])
