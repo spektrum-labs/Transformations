@@ -369,9 +369,13 @@ def test_vnet_rules_behind_an_allow_all_firewall_restrict_nothing(loader):
 
 
 @pytest.mark.parametrize("loader", RUNNERS)
-def test_policy_states_count_only_rows_that_say_non_compliant(loader):
-    compliant_row = {"complianceState": "Compliant", "isCompliant": True}
-    silent_row = {"policyAssignmentName": "test"}
-    assert run(loader, "isAzurePolicyCompliant", {"value": [compliant_row]}) == (True, "success")
-    assert run(loader, "isAzurePolicyCompliant", {"value": [compliant_row, silent_row]}) == (None, "error")
-    assert run(loader, "isAzurePolicyCompliant", {"value": [silent_row, POLICY_STATES["value"][0]]}) == (False, "success")
+def test_policy_states_trust_the_non_compliant_filter(loader):
+    # the query is filtered to NonCompliant: any listed row or a positive count is a fail, whatever
+    # the row says about itself; an empty list is clean only with no count and no unread page
+    row = {"complianceState": "Compliant", "isCompliant": True}
+    assert run(loader, "isAzurePolicyCompliant", {"value": [row]}) == (False, "success")
+    assert run(loader, "isAzurePolicyCompliant", {"value": [{"complianceState": "Unknown"}]}) == (False, "success")
+    assert run(loader, "isAzurePolicyCompliant", {"value": [row], "@odata.count": 7}) == (False, "success")
+    assert run(loader, "isAzurePolicyCompliant", {"value": [], "@odata.count": 3}) == (False, "success")
+    assert run(loader, "isAzurePolicyCompliant", {"value": [], "@odata.nextLink": "https://x"}) == (None, "error")
+    assert run(loader, "isAzurePolicyCompliant", {"value": [], "@odata.count": 0}) == (True, "success")
