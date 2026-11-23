@@ -16,7 +16,7 @@ object) means the body is not that answer. A lookup that answered all three and 
 false) is a real False.
 
 A body the lookup did answer is then judged on enforcing strength, not on a non-empty record: SPF must end in -all or
-~all, DMARC must publish p=quarantine or p=reject (pct=100 unless it is a subdomain-only gap), and DKIM must publish a
+~all, DMARC must request at least quarantine for the domain and its subdomains (p=reject passes at any pct; p=quarantine needs pct=100), and DKIM must publish a
 key that is not revoked. The same block runs in Google, Mimecast, Check Point and Avanan.
 """
 
