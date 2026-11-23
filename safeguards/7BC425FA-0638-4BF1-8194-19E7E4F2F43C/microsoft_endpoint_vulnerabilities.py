@@ -22,25 +22,15 @@ Numbers emitted (every key, so each check's evidence shows all of them):
 Fail closed: anything that is not a complete export read returns every count as None with dataCollection
 "error" (Unevaluated): no envelope, a vendor error body, no `value` list, an @odata.nextLink still present
 (IS stopped at maxPages or a page failed, so the merge is partial), a truncated marker, an empty export
-(Defender Vulnerability Management has assessed nothing, which is not a measured zero), or a record without
-a severity -- or, for a Critical/High record, without deviceId, cveId or a readable firstSeenTimestamp.
+(Defender Vulnerability Management has assessed nothing, which is not a measured zero), or, for a Critical/High record, without deviceId, cveId or a readable firstSeenTimestamp.
+A record whose vulnerabilitySeverityLevel is not Critical/High/Medium/Low (missing, blank, "None", "null",
+unknown) is skipped and counted (recordsWithoutSeverity). When more than 5% are unrated the read is Unevaluated,
+because the unrated records may be Critical and a zero from the rest would not be a measured zero.
+An exception while reading the body is Unevaluated the same way: the except path passes api_errors so
+dataCollection is "error" and Token-Service records the None as not evaluated, never as Failed.
 """
 import json
 from datetime import datetime
-
-#: The criteria this file answers. A None among them means "not measured", never "failed".
-NONE_MEANS_NOT_EVALUATED = ('openCriticalVulnerabilitiesCount', 'openHighSeverityVulnerabilitiesCount', 'overdueCriticalHighVulnerabilitiesCount')
-
-
-def criteria_unmeasured(result):
-    """True when every criterion this file answers that the result carries is None.
-
-    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
-    is "error". The status is read per response, so it is set only when no criterion in the
-    result was measured; marking a partly measured result would hide the measured ones.
-    """
-    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
-    return len(present) > 0 and all(result[k] is None for k in present)
 
 KEY_CRITICAL = "openCriticalVulnerabilitiesCount"
 KEY_HIGH = "openHighSeverityVulnerabilitiesCount"
@@ -82,12 +72,6 @@ def extract_input(input_data):
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None, recommendations=None,
                     input_summary=None, api_errors=None, transformation_errors=None):
-    # A None criterion was not measured. Token-Service grades None as FAILED unless
-    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
-    # reason across when the caller did not.
-    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
-        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
-                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -159,16 +143,19 @@ def measure(data, now):
         return None, ("The vulnerability export is empty: Defender Vulnerability Management has assessed no devices, "
                       "which is not a measured zero.")
     instances = {}
+    no_severity = 0
     for rec in records:
         if not isinstance(rec, dict):
             return None, "A Defender vulnerability record is not an object."
         severity = rec.get("vulnerabilitySeverityLevel")
-        if not isinstance(severity, str) or not severity.strip():
-            return None, "A Defender vulnerability record has no vulnerabilitySeverityLevel."
+        # Token-Service stringifies values, so a JSON null arrives as "None"/"null": only a known level is rated.
+        sev = severity.strip().lower() if isinstance(severity, str) else ""
+        if sev not in ["critical", "high", "medium", "low"]:
+            no_severity = no_severity + 1
+            continue
         status = rec.get("status")
         if isinstance(status, str) and status.strip().lower() in CLOSED_STATUSES:
             continue
-        sev = severity.strip().lower()
         if sev not in ["critical", "high"]:
             continue
         device = rec.get("deviceId")
@@ -198,6 +185,11 @@ def measure(data, now):
                 overdue = overdue + 1
         devices[inst["device"]] = True
         cves[inst["cve"]] = True
+    # Unrated records can only hide more findings, so counts from a read with more than 5% unrated are lower
+    # bounds, and a lower bound would wrongly pass a threshold criterion such as lessThan 5.
+    if no_severity * 20 > len(records):
+        return None, (str(no_severity) + " of " + str(len(records)) + " Defender vulnerability records carry no "
+                      "recognised vulnerabilitySeverityLevel, too many to rate the export.")
     numbers = {
         KEY_CRITICAL: critical,
         KEY_HIGH: high,
@@ -205,6 +197,7 @@ def measure(data, now):
         "devicesWithOpenCriticalOrHigh": len(devices),
         "distinctOpenCriticalOrHighCves": len(cves),
         "vulnerabilityRecordsRead": len(records),
+        "recordsWithoutSeverity": no_severity,
     }
     return numbers, None
 
@@ -218,7 +211,9 @@ def transform(input):
         summary = ("Defender Vulnerability Management export, all pages (" + str(numbers["vulnerabilityRecordsRead"])
                    + " records; open Critical/High on " + str(numbers["devicesWithOpenCriticalOrHigh"]) + " devices): "
                    + str(numbers[KEY_CRITICAL]) + " critical, " + str(numbers[KEY_HIGH]) + " high, "
-                   + str(numbers[KEY_OVERDUE]) + " past the BOD 19-02 window (critical > 15 days, high > 30 days).")
+                   + str(numbers[KEY_OVERDUE]) + " past the BOD 19-02 window (critical > 15 days, high > 30 days)."
+                   + (" " + str(numbers["recordsWithoutSeverity"]) + " unrated record(s) not counted."
+                      if numbers["recordsWithoutSeverity"] else ""))
         passes = []
         fails = []
         recs = []
@@ -233,4 +228,5 @@ def transform(input):
     except Exception as e:
         return create_response(unevaluated_result(), {"status": "error", "errors": [], "warnings": []},
                                fail_reasons=["Transformation error: " + str(e)],
+                               api_errors=["Transformation error: " + str(e)],
                                transformation_errors=[str(e)])

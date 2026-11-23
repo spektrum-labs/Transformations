@@ -19,7 +19,12 @@ from datetime import datetime, timezone
 VENDOR = "Microsoft Defender for Cloud"
 CATEGORY = "Cloud Security"
 WRAPPER_KEYS = ["apiResponse", "api_response", "response", "result", "Output"]
-REQUIRED_ROLES = "Reader and Security Reader on the subscription"
+# Subscription diagnostic settings are Microsoft.Insights/diagnosticSettings/read: Reader has it, Security Reader
+# (Microsoft.Security/*/read) does not.
+REQUIRED_ROLES = "Reader on the subscription (Security Reader cannot read diagnostic settings)"
+ROLE_ADVICE = ("Assign the built-in Reader role on the subscription to the Spektrum app registration (Azure "
+               "portal > Subscriptions > Access control (IAM) > Add role assignment). Security Reader alone "
+               "cannot read the Activity Log export settings; Reader covers every check, so it replaces it.")
 PERMISSION_CODES = ["authorizationfailed", "forbidden", "insufficientpermissions", "linkedauthorizationfailed"]
 
 
@@ -130,9 +135,7 @@ def not_evaluated(keys, reason, problem=None, recommendation=None):
     if is_permission_error(problem):
         out["additionalInfo"]["dataCollection"]["errorCode"] = "permission_not_granted"
         out["additionalInfo"]["dataCollection"]["requiredPermission"] = REQUIRED_ROLES
-        out["additionalInfo"]["evaluation"]["recommendations"] = [
-            "Assign the built-in Reader and Security Reader roles on the subscription to the Spektrum app "
-            "registration (Azure portal > Subscriptions > Access control (IAM) > Add role assignment)."]
+        out["additionalInfo"]["evaluation"]["recommendations"] = [ROLE_ADVICE]
     return out
 
 

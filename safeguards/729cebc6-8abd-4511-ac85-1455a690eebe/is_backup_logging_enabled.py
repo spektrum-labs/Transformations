@@ -41,12 +41,17 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, missing field, transform raised) and must not be graded.
+    value = result.get("isBackupLoggingEnabled") if isinstance(result, dict) else None
+    measured = value is not None
+    not_measured_reasons = api_errors or transformation_errors or fail_reasons or ["isBackupLoggingEnabled could not be measured from the response"]
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else not_measured_reasons
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -88,7 +93,7 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
@@ -113,13 +118,26 @@ def transform(input):
             responses.append(settings_data)
 
         settings = []
+        collections_read = 0
         for resp in responses:
             value = resp.get("value", [])
-            if isinstance(value, list):
+            if isinstance(value, list) and "value" in resp:
+                collections_read += 1
                 settings.extend([s for s in value if isinstance(s, dict)])
             elif isinstance(resp.get("properties"), dict):
                 # A single diagnostic setting object rather than a list wrapper
+                collections_read += 1
                 settings.append(resp)
+
+        if collections_read == 0:
+            # No diagnostic-settings list or setting object anywhere (empty body, refusal,
+            # status stub): nothing was measured. A present, empty 'value' list is a measured
+            # "no diagnostic settings configured" and stays False below.
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                fail_reasons=["isBackupLoggingEnabled not evaluated: no diagnostic settings list in the response"]
+            )
 
         logging_enabled = False
         log_categories_found = []
@@ -200,7 +218,7 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]

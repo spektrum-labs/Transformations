@@ -160,7 +160,7 @@ def affirmative_signal(data):
             return True
         if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
             return True
-    for key in ("items", "data", "records", "results", "logs", "events", "policies",
+    for key in ("value", "items", "data", "records", "results", "logs", "events", "policies",
                 "settings", "configurations", "devices", "agents", "users", "licenses"):
         value = data.get(key)
         if isinstance(value, list) and value:

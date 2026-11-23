@@ -4,10 +4,10 @@ The sibling test_jumpcloud_service_accounts.py drives the transforms with bare b
 wraps the same records the way production does, so a pass or fail here is a pass or fail the
 customer would see:
 
-  * success: IS returns {"result": {"apiResponse": <vendor body>}} (shape seen on the 2026-09-30
-    AGI Media probe of /api/v2/roles through the same JumpCloud definition).
+  * success: IS returns {"result": {"apiResponse": <vendor body>}} (shape seen on a 2026-09-30
+    live probe of /api/v2/roles through the same JumpCloud definition).
   * vendor error: IS returns {"result": {"errorMessage", "vendorStatus", "vendorUrl", ...}}
-    (the exact envelope the 2026-09-30 AGI Media probe of /api/v2/service-accounts returned: 403).
+    (the exact envelope a 2026-09-30 live probe of /api/v2/service-accounts returned: 403).
   * offset paging (limit/skip, dataPath "results"): IS writes every page's records into "results"
     and keeps the vendor's totalCount, so a complete paged read is results == totalCount and a
     read cut off by maxPages is results < totalCount.

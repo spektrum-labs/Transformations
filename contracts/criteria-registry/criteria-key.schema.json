@@ -1,0 +1,348 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/spektrum-labs/Transformations/contracts/criteria-registry/criteria-key.schema.json",
+  "title": "Criteria-key registry entry",
+  "description": "One canonical criteria key: what it asserts, over what population, in what type, which integrations may answer it, and the evidence behind each implementation. tools/check_criteria_registry.py validates every file in contracts/criteria-registry/keys/ against this schema with a stdlib validator that REFUSES any keyword it does not implement, so a keyword added here is either enforced or the checker fails loudly. A field that cannot be evidenced is written as \"unknown\" (or the enum's unknown member) and holds the key at V0; it is never guessed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name", "revision", "status", "definition", "valueType", "unit", "population",
+    "polarity", "evidenceRequiredForTrue", "evidenceClass", "notMeasured",
+    "emptyPopulationMeans", "allowedCategories", "integrationPolicy", "allowedIntegrations",
+    "aliases", "owner", "validation", "citations", "changeLog"
+  ],
+  "properties": {
+    "name": {
+      "description": "Canonical spelling. Case-sensitive: Token-Service extracts transformedResponse[name] by exact match, so a one-character case difference is a different key. Unique case-insensitively across every name AND alias in the registry. Must equal the file's basename.",
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9]{2,79}$"
+    },
+    "revision": {
+      "description": "Integer revision of this entry's MEANING. Prose edits do not bump it; any change to definition, population, evidenceRequiredForTrue or emptyPopulationMeans does, and must add a changeLog row carrying a V3 validation record and a shadow diff.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "status": {
+      "description": "proposed: registered, not yet asked. active: one settled meaning. contested: production implementations answer it with incompatible meanings or types; valueType is not enforced and a conflict block with an open decision is required. deprecated: superseded; deprecatedBy is required and the name may never be reused.",
+      "enum": ["proposed", "active", "contested", "deprecated"]
+    },
+    "definition": {
+      "description": "ONE sentence, written for a transform author to read BEFORE writing a transform: what true (or the number) asserts.",
+      "type": "string",
+      "minLength": 20
+    },
+    "valueType": {
+      "description": "unresolved is permitted only while status is contested.",
+      "enum": ["boolean", "integer", "number", "string", "unresolved"]
+    },
+    "unit": {
+      "enum": ["none", "percent", "count", "days", "hours", "minutes", "seconds", "unknown"]
+    },
+    "domain": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min": {"type": "number"},
+        "max": {"type": "number"}
+      }
+    },
+    "population": {
+      "description": "The exact set the value is computed over, and its denominator for a percentage. \"unknown\" when not evidenced.",
+      "type": "string",
+      "minLength": 7
+    },
+    "polarity": {
+      "description": "Whether true (or a higher number) is the secure state.",
+      "enum": ["good_when_true", "good_when_false", "higher_is_better", "lower_is_better", "unknown"]
+    },
+    "evidenceRequiredForTrue": {
+      "description": "What a transform must have read before it may answer true (or a passing number). A pass from anything less is a false pass.",
+      "type": "string",
+      "minLength": 7
+    },
+    "evidenceClass": {
+      "description": "measured: observed operating across the population. configured: a setting that would enforce it is set. presence: an object exists, nothing about its strength was read. entitlement: a licence, not a control.",
+      "enum": ["measured", "configured", "presence", "entitlement", "unknown"]
+    },
+    "notMeasured": {
+      "description": "Pinned for EVERY key. null is the only value that fails closed under every comparator (False false-passes lessThan/greaterThan via int(float(False)) == 0; 0 false-passes isEquals \"0\" as well), and the envelope is the only channel Token-Service's not-evaluated gate reads (VALIDATION-GATE.md, 'The sentinel rule').",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "envelope"],
+      "properties": {
+        "value": {"const": null},
+        "envelope": {"const": "additionalInfo.dataCollection.status == \"error\""}
+      }
+    },
+    "emptyPopulationMeans": {
+      "description": "What a zero denominator means. A product decision made once, here, per key -- not in every file.",
+      "enum": ["not_measured", "compliant", "non_compliant", "undecided"]
+    },
+    "allowedCategories": {
+      "description": "Canonical category names (GET /integration/enum/categories, plus the five Network Security children it omits) whose integrations may answer this key. Canonical spelling only; category_match.py normalises case, whitespace and one trailing s. An empty list means unrestricted, which is correct only for cross-category evidence such as a licence.",
+      "type": "array",
+      "items": {"type": "string", "minLength": 2},
+      "uniqueItems": true
+    },
+    "integrationPolicy": {
+      "description": "any: every integration in an allowed category may answer it. listed: ONLY the integrations in allowedIntegrations may; Integration-Service rejects an RTA row for this key on any other SRN. This is the field that blocks the Okta case.",
+      "enum": ["any", "listed"]
+    },
+    "allowedIntegrations": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/integration"}
+    },
+    "aliases": {
+      "description": "Other spellings that resolve to this key during a deprecation window. An alias is never a separate meaning.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "note"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{2,79}$"},
+          "since": {"$ref": "#/$defs/date"},
+          "until": {"$ref": "#/$defs/date"},
+          "note": {"type": "string", "minLength": 7}
+        }
+      }
+    },
+    "deprecatedBy": {"type": "string", "pattern": "^[a-z][A-Za-z0-9]{2,79}$"},
+    "owner": {
+      "description": "The person or team that decides this key's meaning. \"unknown\" until named.",
+      "type": "string",
+      "minLength": 2
+    },
+    "conflict": {
+      "description": "Required when status is contested. States every position held in production today and does NOT pick a winner; a proposed resolution is a proposal, and decision.status stays open until the named owner rules.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "positions", "decision"],
+      "properties": {
+        "summary": {"type": "string", "minLength": 20},
+        "positions": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["meaning", "valueType", "integrations", "source"],
+            "properties": {
+              "meaning": {"type": "string", "minLength": 7},
+              "valueType": {"enum": ["boolean", "integer", "number", "string", "mixed", "unknown"]},
+              "population": {"type": "string"},
+              "integrations": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/integration"}},
+              "files": {"type": "array", "items": {"type": "string"}},
+              "source": {"type": "string", "minLength": 7}
+            }
+          }
+        },
+        "proposedResolution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["summary"],
+          "properties": {
+            "summary": {"type": "string", "minLength": 20},
+            "splitKeys": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "definition", "valueType", "existing"],
+                "properties": {
+                  "name": {"type": "string", "pattern": "^[a-z][A-Za-z0-9]{2,79}$"},
+                  "definition": {"type": "string", "minLength": 20},
+                  "valueType": {"enum": ["boolean", "integer", "number", "string"]},
+                  "unit": {"type": "string"},
+                  "existing": {
+                    "description": "true when the key is already emitted somewhere in the estate; a split must reuse an existing key before it mints a new one.",
+                    "type": "boolean"
+                  },
+                  "wouldTake": {"type": "array", "items": {"type": "string"}}
+                }
+              }
+            }
+          }
+        },
+        "decision": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["owner", "status", "question"],
+          "properties": {
+            "owner": {"type": "string", "minLength": 2},
+            "status": {"enum": ["open", "decided"]},
+            "question": {"type": "string", "minLength": 20},
+            "decidedOn": {"$ref": "#/$defs/date"},
+            "ruling": {"type": "string"}
+          }
+        }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "implementations"],
+      "properties": {
+        "level": {
+          "description": "The MINIMUM level across implementations (V0 when none is recorded). One V0 vendor holds the key at V0 in public. The checker recomputes it and fails on a mismatch.",
+          "$ref": "#/$defs/level"
+        },
+        "implementations": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/implementation"}
+        }
+      }
+    },
+    "citations": {
+      "description": "file:line, snapshot path or PR for every factual claim in this entry.",
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 5}
+    },
+    "changeLog": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["revision", "date", "change"],
+        "properties": {
+          "revision": {"type": "integer", "minimum": 1},
+          "date": {"$ref": "#/$defs/date"},
+          "change": {"type": "string", "minLength": 7},
+          "validationRecord": {"type": "string"},
+          "shadowDiff": {"type": "string"}
+        }
+      }
+    },
+    "openDecisions": {
+      "description": "Questions that are not a type or meaning conflict but still need a named human -- typically which integrations may answer the key. Listed here rather than settled by whoever writes the entry.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["owner", "status", "question", "positions"],
+        "properties": {
+          "owner": {"type": "string", "minLength": 2},
+          "status": {"enum": ["open", "decided"]},
+          "question": {"type": "string", "minLength": 20},
+          "positions": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 7}},
+          "ruling": {"type": "string"}
+        }
+      }
+    },
+    "notes": {"type": "string"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "contested"}}},
+      "then": {"required": ["conflict"]}
+    },
+    {
+      "if": {"properties": {"status": {"const": "deprecated"}}},
+      "then": {"required": ["deprecatedBy"]}
+    },
+    {
+      "if": {"properties": {"valueType": {"const": "unresolved"}}},
+      "then": {"properties": {"status": {"const": "contested"}}}
+    },
+    {
+      "if": {"properties": {"valueType": {"enum": ["integer", "number"]}}},
+      "then": {"properties": {"unit": {"enum": ["percent", "count", "days", "hours", "minutes", "seconds", "unknown"]}}}
+    },
+    {
+      "if": {"properties": {"valueType": {"const": "boolean"}}},
+      "then": {"properties": {"unit": {"const": "none"}, "polarity": {"enum": ["good_when_true", "good_when_false", "unknown"]}}}
+    },
+    {
+      "if": {"properties": {"integrationPolicy": {"const": "listed"}}},
+      "then": {"properties": {"allowedIntegrations": {"minItems": 1}}}
+    }
+  ],
+  "$defs": {
+    "date": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+    "level": {"enum": ["V0", "V1", "V2", "V3"]},
+    "srn": {
+      "description": "Integration SRN, lower-case UUID. An SRN is a public catalogue identifier, not a tenant id.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "integration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["srn", "name"],
+      "properties": {
+        "srn": {"$ref": "#/$defs/srn"},
+        "name": {"type": "string", "minLength": 2},
+        "note": {"type": "string"}
+      }
+    },
+    "pathVerdict": {"enum": ["pass", "fail", "unverified"]},
+    "implementation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["integration", "transform", "level", "notMeasuredConformance"],
+      "properties": {
+        "integration": {"$ref": "#/$defs/integration"},
+        "transform": {
+          "description": "Repo path of the transform the RTA row points at today, with the ref it is pinned to when that is not main.",
+          "type": "string",
+          "minLength": 5
+        },
+        "level": {"$ref": "#/$defs/level"},
+        "meaning": {"type": "string"},
+        "api": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "endpoint": {"type": "string"},
+            "documentation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["url", "retrieved"],
+              "properties": {
+                "url": {"type": "string"},
+                "retrieved": {"type": "string"}
+              }
+            },
+            "fields": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path", "type"],
+                "properties": {
+                  "path": {"type": "string"},
+                  "type": {"type": "string"},
+                  "meaning": {"type": "string"}
+                }
+              }
+            },
+            "pagination": {"type": "string"},
+            "scope": {"type": "string"}
+          }
+        },
+        "notMeasuredConformance": {
+          "description": "Replay-backed, per path. A CI pass is not conformance: an allowlisted file passes CI and conforms to nothing.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["paths"],
+          "properties": {
+            "paths": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["refusal", "emptyBody", "poisoned"],
+              "properties": {
+                "refusal": {"$ref": "#/$defs/pathVerdict"},
+                "emptyBody": {"$ref": "#/$defs/pathVerdict"},
+                "poisoned": {"$ref": "#/$defs/pathVerdict"}
+              }
+            },
+            "evidence": {"type": "string"}
+          }
+        },
+        "evidence": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

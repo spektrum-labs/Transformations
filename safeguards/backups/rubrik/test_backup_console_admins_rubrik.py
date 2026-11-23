@@ -1,5 +1,5 @@
 """Rubrik Security Cloud areBackupConsoleAdminsDedicated: fixtures from the RSC GraphQL schema (type User,
-UserDomainEnum, Role.isOrgAdmin). Names are synthetic (example.com)."""
+UserDomainEnum, type Group, Role.isOrgAdmin). Names are synthetic (example.com)."""
 import importlib.util
 import json
 import os
@@ -75,56 +75,126 @@ VIEWER = {"id": "r-view", "name": "Viewer", "isOrgAdmin": False}
 
 def user(email, domain="SSO", roles=None, status="ACTIVE", owner=False):
     return {"id": email, "username": email, "email": email, "domain": domain, "status": status,
-            "isAccountOwner": owner, "roles": [ADMIN] if roles is None else roles}
+            "isAccountOwner": owner, "roles": [ADMIN] if roles is None else roles, "allOrgs": [{"id": "o1"}]}
 
 
-def body(nodes, has_next=False, end=None, count=None, truncated=None):
+def group(gid, roles=None):
+    return {"groupId": gid, "roles": [VIEWER] if roles is None else roles, "allOrgs": [{"id": "o1"}]}
+
+
+def body(nodes, has_next=False, end=None, count=None, truncated=None, groups=None, groups_next=False):
     info = {"hasNextPage": has_next, "endCursor": end}
     if truncated is not None:
         info["truncated"] = truncated
-    return {"data": {"usersInCurrentAndDescendantOrganization": {
-        "count": len(nodes) if count is None else count, "pageInfo": info, "nodes": nodes}}}
+    groups = [] if groups is None else groups
+    return {"data": {
+        "usersInCurrentAndDescendantOrganization": {
+            "count": len(nodes) if count is None else count, "pageInfo": info, "nodes": nodes},
+        "groupsInCurrentAndDescendantOrganization": {
+            "count": len(groups), "pageInfo": {"hasNextPage": groups_next, "endCursor": "c9" if groups_next else None},
+            "nodes": groups}}}
 
 
+#: One person administers through a local console account and keeps an everyday SSO identity with no admin role.
 PASSING = body([
     user("owner@example.com", domain="LOCAL", owner=True, roles=[]),
-    user("adm-jdoe@example.com"),
-    user("jroe.admin@example.com", domain="LDAP"),
-    user("svc-client", domain="CLIENT"),
+    user("jdoe@example.com", domain="LOCAL"),
     user("jdoe@example.com", roles=[VIEWER]),
+    user("svc-client", domain="CLIENT"),
     user("former@example.com", status="DEACTIVATED"),
-])
+], groups=[group("g-viewers")])
 
+#: The flip: the same person's SSO identity also holds the administrator role.
 FAILING = body([
-    user("adm-jdoe@example.com"),
+    user("jdoe@example.com", domain="LOCAL"),
     user("jane.doe@example.com"),
 ])
 
 
 @pytest.mark.parametrize("loader", [load_plain, load_sandboxed])
-def test_dedicated_admins_pass(loader):
+def test_separate_identities_pass(loader):
     out = run(PASSING, loader)
     assert out["transformedResponse"][KEY] is True
-    assert out["additionalInfo"]["transformation"]["inputSummary"]["consoleAdministrators"] == 4
+    s = out["additionalInfo"]["transformation"]["inputSummary"]
+    assert (s["consoleAdministrators"], s["localConsoleAccounts"], s["nonPersonAccounts"]) == (3, 2, 1)
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
 
 
 @pytest.mark.parametrize("loader", [load_plain, load_sandboxed])
-def test_unmarked_sso_admin_not_evaluated(loader):
+def test_sso_admin_not_evaluated(loader):
     out = run(FAILING, loader)
     assert out["transformedResponse"][KEY] is None
-    assert "jane.doe@example.com" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+    assert "1 of 2 console administrators sign in with an SSO or LDAP identity" in \
+        out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+@pytest.mark.parametrize("name", ["adm-jdoe@example.com", "jdoe.admin@example.com", "a-jdoe@example.com",
+                                  "jdoe@admin.example.com", "svc-backup@example.com"])
+@pytest.mark.parametrize("domain", ["SSO", "LDAP"])
+def test_admin_names_no_longer_prove_dedication(name, domain):
+    assert value(body([user(name, domain=domain)])) is None
+
+
+@pytest.mark.parametrize("domain", ["LOCAL", "CLIENT", "PAT", "SUPPORT"])
+def test_separate_or_non_person_domains_pass(domain):
+    assert value(body([user("jane.doe@example.com", domain=domain)])) is True
+
+
+def test_unknown_domain_not_evaluated():
+    assert value(body([user("jdoe@example.com", domain="NEWKIND")])) is None
+    assert value(body([user("jdoe@example.com", domain=None)])) is None
+
+
+def test_admin_group_not_evaluated():
+    out = run(body([user("jdoe@example.com", domain="LOCAL")], groups=[group("g1"), group("g2", roles=[ADMIN])]))
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["adminGroups"] == 1
+    assert "1 SSO or directory group(s) hold an RSC administrator role" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_group_named_admin_role_counts():
+    custom = {"id": "r-c", "name": "Backup Admins", "isOrgAdmin": False}
+    assert value(body([user("jdoe@example.com", domain="LOCAL")], groups=[group("g1", roles=[custom])])) is None
+
+
+def test_group_read_missing_or_partial_not_evaluated():
+    b = body([user("jdoe@example.com", domain="LOCAL")])
+    del b["data"]["groupsInCurrentAndDescendantOrganization"]
+    assert value(b) is None
+    b = body([user("jdoe@example.com", domain="LOCAL")])
+    b["data"]["groupsInCurrentAndDescendantOrganization"] = None
+    assert value(b) is None
+    assert value(body([user("jdoe@example.com", domain="LOCAL")], groups=[group("g1")], groups_next=True)) is None
+    b = body([user("jdoe@example.com", domain="LOCAL")], groups=[group("g1")])
+    b["data"]["groupsInCurrentAndDescendantOrganization"]["count"] = 3
+    assert value(b) is None
+    b = body([user("jdoe@example.com", domain="LOCAL")], groups=[group("g1")])
+    del b["data"]["groupsInCurrentAndDescendantOrganization"]["nodes"][0]["roles"]
+    assert value(b) is None
+
+
+def test_group_graphql_error_not_evaluated():
+    b = body([user("jdoe@example.com", domain="LOCAL")])
+    b["data"]["groupsInCurrentAndDescendantOrganization"] = None
+    b["errors"] = [{"message": "Not authorized", "path": ["groupsInCurrentAndDescendantOrganization"]}]
+    out = run(b)
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
 
 
 def test_wrapped_same_answers():
     assert value(ts_wrap(PASSING)) is True
     assert value(ts_wrap(FAILING)) is None
+    assert value(json.dumps(PASSING)) is True
     assert value(json.dumps(FAILING)) is None
 
 
 def test_partial_pages_not_evaluated():
-    assert value(body([user("adm-jdoe@example.com")], has_next=True, end="c1")) is None
-    assert value(body([user("adm-jdoe@example.com")], truncated=True)) is None
-    assert value(body([user("adm-jdoe@example.com")], count=5)) is None
+    local = user("jdoe@example.com", domain="LOCAL")
+    assert value(body([local], has_next=True, end="c1")) is None
+    assert value(body([local], truncated=True)) is None
+    assert value(body([local], count=5)) is None
 
 
 def test_graphql_error_not_evaluated():
@@ -136,105 +206,45 @@ def test_graphql_error_not_evaluated():
 
 def test_no_admin_in_read_not_evaluated():
     assert value(body([user("jdoe@example.com", roles=[VIEWER])])) is None
+    assert value(body([])) is None
 
 
 def test_missing_roles_not_evaluated():
-    node = user("jdoe@example.com")
+    node = user("jdoe@example.com", domain="LOCAL")
     del node["roles"]
     assert value(body([node])) is None
 
 
-def test_unknown_domain_unmarked_not_evaluated():
-    assert value(body([user("jdoe@example.com", domain="NEWKIND")])) is None
+def test_deactivated_directory_admin_ignored():
+    assert value(body([user("jdoe@example.com", domain="LOCAL"), user("jane.doe@example.com", status="DEACTIVATED")])) is True
 
 
-def test_role_named_admin_counts():
-    custom = {"id": "r-c", "name": "Backup Admins", "isOrgAdmin": False}
-    assert value(body([user("jdoe@example.com", roles=[custom])])) is None
+def test_account_owner_on_sso_not_evaluated():
+    assert value(body([user("jane.doe@example.com", owner=True, roles=[])])) is None
 
 
-@pytest.mark.parametrize("name,expected", [
-    ("adm-jdoe@example.com", True), ("jdoe-adm@example.com", True), ("a-jdoe@example.com", True),
-    ("jdoe_a@example.com", True), ("adminjdoe@example.com", True), ("t0.jdoe@example.com", True),
-    ("jdoe@admin.example.com", True), ("doe.a@example.com", None), ("jane.doe@example.com", None),
-    ("admiral.jones@example.com", None), ("sam@example.com", None),
-    ("pam.smith@example.com", None), ("pam@example.com", None), ("joe.root@example.com", None),
-    ("jdoe@privatebank.com", None), ("jdoe@adminsoft.com", None), ("jdoe@cityadm.gov", None),
-    ("jdoe@admin.ch", None), ("administration@example.com", None), ("badmin@example.com", None),
-])
-def test_identity_marker(name, expected):
-    assert value(body([user(name)])) is expected
-
-
-def test_unmarked_identity_reads_not_evaluated():
-    out = run(FAILING)
-    assert out["transformedResponse"][KEY] is None
-    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
-    assert "no admin marker" in out["additionalInfo"]["evaluation"]["failReasons"][0]
-
-
-# The naming rule is the same block in all five IAM-004 transforms; these rows are the same in every test file.
-
-def load_module():
-    spec = importlib.util.spec_from_file_location(MODULE_NAME + "_rule", FILE)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-MARKER_ROWS = [
-    ("adm-jdoe@example.com", True), ("jdoe-adm@example.com", True), ("a-jdoe@example.com", True),
-    ("jdoe_a@example.com", True), ("adminjdoe@example.com", True), ("admin01@example.com", True),
-    ("t0.jdoe@example.com", True), ("pam-jdoe@example.com", True), ("root_backup@example.com", True),
-    ("veeamadmin@example.com", True), ("jdoe@admin.example.com", True), ("jdoe@t0.corp.example", True),
-    ("ADM\\jdoe", True), ("CORP-ADM\\jdoe", True),
-    # personal names, not markers
-    ("pam.smith@example.com", False), ("pam@example.com", False), ("joe.root@example.com", False),
-    ("administration@example.com", False), ("badmin@example.com", False), ("padmin@example.com", False),
-    ("jdoeadmin@example.com", False), ("doe.a@example.com", False), ("admiral.jones@example.com", False),
-    # the organisation's own domain is never a marker; a domain label matches only as a whole word
-    ("jdoe@privatebank.com", False), ("jdoe@adminsoft.com", False), ("jdoe@cityadm.gov", False),
-    ("jdoe@admin.ch", False), ("jdoe@admin.co.uk", False), ("jdoe@admin.gv.at", False), ("PRIVATECO\\jdoe", False), ("CORPADM\\jdoe", False),
-]
-
-
-@pytest.mark.parametrize("name,marked", MARKER_ROWS)
-def test_shared_admin_marker(name, marked):
-    assert load_module().has_admin_marker(name, False) is marked
-
-
-@pytest.mark.parametrize("group,cls", [
-    ("PRIVATECO\\Domain Users", "everyday-group"), ("CITYADM\\Staff", "everyday-group"),
-    ("CORP\\Backup-Admins", "group"), ("BUILTIN\\Administrators", "group"), ("ADM\\Backup Operators", "group"),
-])
-def test_shared_group_marker(group, cls):
-    assert load_module().classify([group], "group", "directory") == cls
-
-
-#: Everyday addresses that the earlier rule read as admin accounts. Each, holding admin, reads Not evaluated.
-UNMARKED_NAMES = ["pam.smith@example.com", "pam@example.com", "joe.root@example.com", "jdoe@privatebank.com",
-                  "jdoe@adminsoft.com", "jdoe@cityadm.gov", "jdoe@admin.ch"]
-
-
-@pytest.mark.parametrize("name", UNMARKED_NAMES)
-def test_everyday_names_read_not_evaluated(name):
-    assert value(body([user("adm-jdoe@example.com"), user(name)])) is None
+def test_reasons_and_summary_carry_no_identities():
+    """C4: reason text and evidence are shown to customers, so they carry counts, never names or addresses."""
+    bodies = [PASSING, FAILING, body([user("jane.doe@example.com", domain="NEWKIND")]),
+              body([user("jdoe@example.com", domain="LOCAL")], groups=[group("g-secret-name", roles=[ADMIN])])]
+    for b in bodies:
+        text = json.dumps(run(b)["additionalInfo"])
+        for ident in ("example.com", "jdoe", "jane", "svc-client", "g-secret-name", "owner@"):
+            assert ident not in text, (ident, text)
 
 
 def test_rubrik_answers_true_or_none_only():
-    """Rubrik never returns False (J.J., 6 Oct 2026): the RSC user list has no groups, and an unmarked SSO or
-    LDAP administrator reads Not evaluated."""
+    """Rubrik never returns False: nothing in the RSC read shows that a directory identity is a person's everyday
+    sign-in."""
     bodies = [PASSING, FAILING, body([user("jane.doe@example.com", domain="LDAP")]),
               body([user("jane.doe@example.com", owner=True, roles=[])]),
-              body([user("owner@example.com", domain="LOCAL", owner=True), user("jane.doe@example.com")])]
-    for name, _ in MARKER_ROWS:
-        bodies.append(body([user(name)]))
+              body([user("jdoe@example.com", domain="LOCAL")], groups=[group("g", roles=[ADMIN])])]
     for b in bodies:
         assert value(b) in (True, None)
 
 
 def test_merged_pages_need_a_count():
-    nodes = [user("adm-jdoe@example.com")]
+    nodes = [user("jdoe@example.com", domain="LOCAL")]
     merged = body(nodes, has_next=True, end=None)
     assert value(merged) is True
     del merged["data"]["usersInCurrentAndDescendantOrganization"]["count"]
@@ -245,7 +255,7 @@ def test_merged_pages_need_a_count():
 
 
 def test_count_still_optional_on_a_single_page():
-    b = body([user("adm-jdoe@example.com")])
+    b = body([user("jdoe@example.com", domain="LOCAL")])
     del b["data"]["usersInCurrentAndDescendantOrganization"]["count"]
     assert value(b) is True
 
@@ -260,9 +270,136 @@ def test_count_still_optional_on_a_single_page():
 def test_custom_role_name_whole_words(role_name, counts):
     custom = {"id": "r-c", "name": role_name, "isOrgAdmin": False}
     expected = None if counts else True
-    assert value(body([user("adm-jdoe@example.com"), user("jane.doe@example.com", roles=[custom])])) is expected
+    assert value(body([user("jdoe@example.com", domain="LOCAL"), user("jane.doe@example.com", roles=[custom])])) is expected
 
 
 def test_is_org_admin_counts_whatever_the_name():
     custom = {"id": "r-c", "name": "Viewer", "isOrgAdmin": True}
-    assert value(body([user("adm-jdoe@example.com"), user("jane.doe@example.com", roles=[custom])])) is None
+    assert value(body([user("jdoe@example.com", domain="LOCAL"), user("jane.doe@example.com", roles=[custom])])) is None
+
+
+def test_group_with_roles_only_in_sub_org_not_evaluated():
+    sub = group("g", roles=[])
+    sub["allOrgs"] = [{"id": "o2"}]
+    out = run(body([user("jdoe@example.com", domain="LOCAL")], groups=[sub]))
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgGroups"] == 1
+
+
+def test_group_org_admin_flag_on_viewer_named_role_not_evaluated():
+    role = {"id": "r", "name": "Viewer", "isOrgAdmin": True}
+    assert value(body([user("jdoe@example.com", domain="LOCAL")], groups=[group("g", roles=[role])])) is None
+
+
+def test_user_with_roles_only_in_sub_org_not_evaluated():
+    sub = user("jdoe@example.com", domain="LOCAL", roles=[])
+    sub["allOrgs"] = [{"id": "o2"}]
+    out = run(body([user("owner@example.com", domain="LOCAL"), sub]))
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgUsers"] == 1
+
+
+def test_role_less_user_in_context_org_only_is_not_a_sub_org_signal():
+    plain = user("jdoe@example.com", domain="LOCAL", roles=[])
+    plain["allOrgs"] = []
+    out = run(body([user("owner@example.com", domain="LOCAL"), plain]))
+    assert out["transformedResponse"][KEY] is True
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgUsers"] == 0
+
+
+def test_user_without_roles_and_without_allorgs_key_not_evaluated():
+    plain = user("jdoe@example.com", domain="LOCAL", roles=[])
+    del plain["allOrgs"]
+    out = run(body([user("owner@example.com", domain="LOCAL"), plain]))
+    assert out["transformedResponse"][KEY] is None
+
+
+@pytest.mark.parametrize("orgs", [None, "o2"])
+def test_non_admin_user_with_roles_and_no_org_list_not_evaluated(orgs):
+    sso = user("jane@example.com", roles=[VIEWER])
+    if orgs is None:
+        del sso["allOrgs"]
+    else:
+        sso["allOrgs"] = orgs
+    out = run(body([user("owner@example.com", domain="LOCAL"), sso]))
+    assert out["transformedResponse"][KEY] is None
+    assert "no organization list" in out["additionalInfo"]["dataCollection"]["errors"][0]
+
+
+def test_sso_viewer_with_admin_in_sub_org_not_evaluated():
+    sso = user("jane@example.com", roles=[VIEWER])
+    sso["allOrgs"] = [{"id": "o1"}, {"id": "o2"}]
+    out = run(body([user("owner@example.com", domain="LOCAL"), sso]))
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgUsers"] == 1
+
+
+def test_group_viewer_with_sub_org_not_evaluated():
+    g = group("g", roles=[VIEWER])
+    g["allOrgs"] = [{"id": "o1"}, {"id": "o2"}]
+    out = run(body([user("owner@example.com", domain="LOCAL")], groups=[g]))
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgGroups"] == 1
+
+
+def test_group_without_org_list_not_evaluated():
+    g = group("g")
+    del g["allOrgs"]
+    assert value(body([user("owner@example.com", domain="LOCAL")], groups=[g])) is None
+
+
+def test_non_admin_only_in_context_org_still_passes():
+    assert value(body([user("owner@example.com", domain="LOCAL"), user("jane@example.com", roles=[VIEWER])],
+                      groups=[group("g")])) is True
+
+
+def test_query_does_not_need_current_org():
+    b = body([user("owner@example.com", domain="LOCAL"), user("jane@example.com", roles=[VIEWER])])
+    assert "currentOrg" not in b["data"]
+    assert value(b) is True
+
+
+def test_stray_current_org_is_ignored():
+    b = body([user("owner@example.com", domain="LOCAL"), user("jane@example.com", roles=[VIEWER])])
+    b["data"]["currentOrg"] = {"id": "o9"}
+    assert value(b) is True
+
+
+def test_context_org_derived_when_an_admin_also_holds_a_sub_org_role():
+    owner = user("owner@example.com", domain="LOCAL")
+    owner["allOrgs"] = [{"id": "o2"}, {"id": "o1"}]
+    assert value(body([owner, user("jane@example.com", roles=[VIEWER])])) is True
+
+
+def test_context_org_underivable_fails_closed_for_sub_org_case_only():
+    # every role holder also holds roles in o2: o1 and o2 are both common, so which is the context is unknown
+    both = [{"id": "o1"}, {"id": "o2"}]
+    owner = user("owner@example.com", domain="LOCAL")
+    owner["allOrgs"] = both
+    viewer = user("jane@example.com", roles=[VIEWER])
+    viewer["allOrgs"] = both
+    out = run(body([owner, viewer]))
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgUndecided"] == 1
+    assert "context organization cannot be derived" in out["additionalInfo"]["dataCollection"]["errors"][0]
+    # the same org lists with no non-admin account to place still pass
+    assert value(body([owner])) is True
+
+
+def test_context_org_underivable_when_role_holders_share_no_org():
+    other = user("jane@example.com", roles=[VIEWER])
+    other["allOrgs"] = [{"id": "o2"}]
+    out = run(body([user("owner@example.com", domain="LOCAL"), other]))
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgUndecided"] == 1
+
+
+def test_deactivated_account_does_not_decide_the_context_org():
+    gone = user("gone@example.com", status="DEACTIVATED")
+    gone["allOrgs"] = [{"id": "o7"}]
+    assert value(body([user("owner@example.com", domain="LOCAL"), gone])) is True
+
+
+def test_reasons_carry_no_email():
+    out = run(body([user("owner@example.com", domain="LOCAL"), user("jane.doe@example.com")]))
+    assert "example.com" not in json.dumps(out)

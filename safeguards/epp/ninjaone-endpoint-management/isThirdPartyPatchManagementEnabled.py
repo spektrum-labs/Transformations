@@ -67,6 +67,40 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def devices_in_scope(data):
+    """The device list the workflow put beside the organizations/policies, or None when there is none.
+
+    With the definition's optional organizationFilter set, getDevicesDetailed returns only the devices
+    of the organizations in scope, so this list is what decides which organizations and policies count.
+    Without it (older workflow, or a bare list) the check judges everything it was given, as before.
+    """
+    if isinstance(data, dict) and isinstance(data.get("devices"), list):
+        return [d for d in data["devices"] if isinstance(d, dict)]
+    return None
+
+
+def policies_for_devices(policies, devices):
+    """Only the policies that apply to the given devices: each device's policyId and rolePolicyId, plus
+    every ancestor through parentPolicyId (a child policy inherits its parent's settings)."""
+    by_id = {}
+    for p in policies:
+        if isinstance(p, dict):
+            by_id[p.get("id")] = p
+    wanted = set()
+    for d in devices:
+        for field in ("policyId", "rolePolicyId"):
+            value = d.get(field)
+            if isinstance(value, int) and not isinstance(value, bool):
+                wanted.add(value)
+    pending = list(wanted)
+    while pending:
+        parent = (by_id.get(pending.pop()) or {}).get("parentPolicyId")
+        if isinstance(parent, int) and not isinstance(parent, bool) and parent not in wanted:
+            wanted.add(parent)
+            pending.append(parent)
+    return [p for p in policies if isinstance(p, dict) and p.get("id") in wanted]
+
+
 def scan_for_third_party_patch_flag(obj, depth):
     """Recursively scan a policy object for a third-party software patch
     management toggle. Returns True/False/None (None = not found)."""
@@ -133,6 +167,13 @@ def transform(input):
     else:
         policies = []
 
+    devices = devices_in_scope(data)
+    policies_out_of_scope = 0
+    if devices is not None:
+        scoped = policies_for_devices(policies, devices)
+        policies_out_of_scope = len(policies) - len(scoped)
+        policies = scoped
+
     total_policies = len(policies)
     policies_with_conditions = 0
     third_party_enabled_policies = []
@@ -186,6 +227,7 @@ def transform(input):
         "isThirdPartyPatchManagementEnabled": is_enabled,
         "totalPolicies": total_policies,
         "policiesWithThirdPartyPatchEnabled": len(third_party_enabled_policies),
+        "policiesOutOfScope": policies_out_of_scope,
     }
 
     return create_response(

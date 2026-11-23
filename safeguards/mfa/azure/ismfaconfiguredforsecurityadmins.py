@@ -3,10 +3,37 @@ Transformation: isMFAConfiguredForSecurityAdmins
 Vendor: Microsoft Entra ID  |  Category: Multifactor Authentication
 Evaluates: Whether MFA is required for security admin roles via Conditional Access
 
-A policy satisfies this check when it is enabled, requires MFA (via
-builtInControls or authenticationStrength), and covers security admin
-roles either by targeting "All" users without excluding admin roles
-or by explicitly including admin role IDs.
+A role is covered by a policy that is enabled, requires MFA (via builtInControls
+or authenticationStrength), reaches the administrative surface (includeApplications
+"All" or "MicrosoftAdminPortals", with neither the Microsoft Admin Portals nor the
+Microsoft Azure Management app excluded), is not limited to risky sign-ins, and
+targets the role ("All" users, "All" roles, or the role id) without excluding it.
+The check passes only when every one of the six security admin roles is covered:
+a policy for one role says nothing about the other five.
+
+Reaching the administrative surface is not the same as reaching every admin
+sign-in. The Entra MFA review (overstated passes, decision 18 Oct 2026) aligns this check
+with the remote-access (entra_ca_mfa_coverage.py) and phishing-resistant
+(entra_ca_authstrength_phishing_resistant.py) checks:
+- a policy narrowed by client app types, platforms, a device filter, named
+  locations only, or any excluded location (strict_narrowing) does not count;
+  a role covered by nothing else is a measured gap (False);
+- a policy that excludes a group, a directory role, guests or external users, or
+  more than MAX_BREAK_GLASS named accounts, or counting policies that exclude
+  more than MAX_BREAK_GLASS named accounts in total, leave coverage unproven:
+  None (not evaluated), not False, because group and role membership is not read.
+An excluded location, AllTrusted included, skips MFA from there: named locations are not read, so the
+excluded one could be a wide range where admin sign-ins are not asked for MFA. The policy does not count
+(as in entra_ca_authstrength_phishing_resistant.py) and the fail reason carries the count of excluded
+locations, never their ids. On AllTrusted this differs from the remote-access check
+(entra_ca_mfa_coverage.py), which lets it through: an admin MFA policy must reach every admin sign-in, so it
+follows the phishing-resistant rule (decision: review of PR #1381, 19 Nov 2026). Excluded applications other than the admin surface do not change the verdict; they
+are named in additionalFindings (narrowing_conditions).
+
+Break-glass (row 36B (c), decision 18 Oct 2026): a counting policy may exclude
+at most MAX_BREAK_GLASS named accounts or one group (MAX_BREAK_GLASS_GROUPS),
+not both, and the same limit holds in total across the counting policies. The
+pass reason names the excluded accounts or group. More than that is None.
 
 API: GET /v1.0/identity/conditionalAccess/policies
 
@@ -234,48 +261,177 @@ def policy_requires_mfa(policy):
     return False
 
 
-def policy_covers_admin_roles(policy):
-    """Check if policy targets security admin roles. Returns list of covered role names."""
-    conditions = policy.get("conditions", {})
+# A policy only counts when it applies to every cloud app or to the Microsoft Admin Portals app, as in
+# Microsoft's "Require MFA for administrators" policy (Target resources: All resources), and is not limited to
+# risky sign-ins: a policy with userRiskLevels or signInRiskLevels set asks for MFA only when Entra ID Protection
+# scores the sign-in or user as risky.
+ADMIN_APPS = ["All", "MicrosoftAdminPortals"]
+
+# An exclusion that removes the administrative surface from an otherwise all-apps policy exempts exactly the
+# sign-ins this check is about, so the policy no longer counts. "MicrosoftAdminPortals" is the resource grouping
+# Microsoft's own "Require MFA for administrators" policy targets (Azure portal, Entra admin center, Microsoft
+# 365 admin center, Exchange and Defender portals); 797f4846-ba00-4fd7-ba43-dac1f8f63013 is Microsoft Azure
+# Management, the control plane behind the Azure portal, Azure CLI and Azure PowerShell.
+# Docs: https://learn.microsoft.com/en-us/entra/identity/conditional-access/concept-conditional-access-cloud-apps
+# Any other exclusion (a line-of-business app, a break-glass service principal) leaves the admin surface
+# covered, so it is reported as a narrowing condition rather than read as a bypass -- see narrowing_conditions.
+# Rejecting every exclusion would fail tenants whose admin policy is correct.
+ADMIN_SURFACE_EXCLUSIONS = ["all", "microsoftadminportals", "797f4846-ba00-4fd7-ba43-dac1f8f63013"]
+MAX_BREAK_GLASS = 2
+MAX_BREAK_GLASS_GROUPS = 1
+USER_KEYWORDS = ["all", "none", "guestsorexternalusers"]
+
+
+def listed(block, name):
+    if not isinstance(block, dict):
+        return []
+    value = block.get(name)
+    return value if isinstance(value, list) else []
+
+
+def folded(values):
+    return [str(v).strip().lower() for v in values]
+
+
+def narrowing_conditions(policy):
+    """Conditions on a counted policy that keep it from reaching every admin sign-in.
+
+    None of these change the verdict. The defaults a correctly scoped policy carries -- clientAppTypes ["all"],
+    no platforms condition, includeLocations ["All"] -- are indistinguishable in shape from a deliberate
+    narrowing, and excluding the break-glass accounts from an admin MFA policy is Microsoft's own documented
+    advice, so rejecting a policy for carrying any of them would fail tenants configured the way Microsoft
+    recommends. They are named in additionalFindings instead, so a policy that asks for MFA on only part of
+    admin sign-ins is visible rather than silent.
+    """
+    conditions = policy.get("conditions")
     if not isinstance(conditions, dict):
         return []
-    users = conditions.get("users", {})
-    if not isinstance(users, dict):
+    found = []
+    client_apps = folded(listed(conditions, "clientAppTypes"))
+    if client_apps and "all" not in client_apps:
+        found.append("client app types " + ", ".join(client_apps))
+    platforms = folded(listed(conditions.get("platforms"), "includePlatforms"))
+    if platforms and "all" not in platforms:
+        found.append("platforms " + ", ".join(platforms))
+    include_locations = folded(listed(conditions.get("locations"), "includeLocations"))
+    if include_locations and "all" not in include_locations:
+        found.append("named locations only")
+    for block, name, label in [(conditions.get("applications"), "excludeApplications", "application"),
+                               (conditions.get("users"), "excludeUsers", "user"),
+                               (conditions.get("users"), "excludeGroups", "group")]:
+        count = len(listed(block, name))
+        if count:
+            found.append(str(count) + " excluded " + label + "(s)")
+    return found
+
+
+def excluded_locations(policy):
+    """The locations this policy excludes, "none" aside. Fail closed: a value that is not a list counts as one."""
+    conditions = policy.get("conditions")
+    locations = conditions.get("locations") if isinstance(conditions, dict) else None
+    raw = locations.get("excludeLocations") if isinstance(locations, dict) else None
+    if isinstance(raw, list):
+        return [v for v in folded(raw) if v and v != "none"]
+    return [str(raw)] if raw else []
+
+
+def strict_narrowing(policy):
+    """Conditions that keep a policy from every admin sign-in, judged as the remote-access and phishing-resistant
+    checks judge them: client app types, platforms, a device filter, named locations only, or any excluded
+    location (named locations are not read, so an excluded one may be a range that skips MFA)."""
+    conditions = policy.get("conditions")
+    if not isinstance(conditions, dict):
         return []
+    found = []
+    client_apps = folded(listed(conditions, "clientAppTypes"))
+    if client_apps and "all" not in client_apps and not ("browser" in client_apps
+                                                         and "mobileappsanddesktopclients" in client_apps):
+        found.append("client app types " + ", ".join(client_apps))
+    platforms = conditions.get("platforms")
+    include_platforms = folded(listed(platforms, "includePlatforms"))
+    if (include_platforms and "all" not in include_platforms) or listed(platforms, "excludePlatforms"):
+        found.append("platforms")
+    devices = conditions.get("devices")
+    device_filter = devices.get("deviceFilter") if isinstance(devices, dict) else None
+    if isinstance(device_filter, dict) and str(device_filter.get("rule") or "").strip():
+        found.append("a device filter")
+    include_locations = folded(listed(conditions.get("locations"), "includeLocations"))
+    if include_locations and "all" not in include_locations:
+        found.append("named locations only")
+    excluded = excluded_locations(policy)
+    if excluded:
+        found.append(str(len(excluded)) + " excluded location(s)")
+    return found
 
-    include_users = users.get("includeUsers", [])
-    if not isinstance(include_users, list):
-        include_users = []
-    include_roles = users.get("includeRoles", [])
-    if not isinstance(include_roles, list):
-        include_roles = []
-    exclude_roles = users.get("excludeRoles", [])
-    if not isinstance(exclude_roles, list):
-        exclude_roles = []
 
+def exclusion_problems(policy):
+    """(what the policy excludes beyond break-glass, the named accounts it excludes, the groups it excludes).
+    Break-glass is at most MAX_BREAK_GLASS named accounts or MAX_BREAK_GLASS_GROUPS group, not both."""
+    conditions = policy.get("conditions")
+    users = conditions.get("users") if isinstance(conditions, dict) else None
+    found = []
+    excluded = folded(listed(users, "excludeUsers"))
+    named = [v for v in excluded if v and v not in USER_KEYWORDS]
+    groups = [g for g in folded(listed(users, "excludeGroups")) if g]
+    if isinstance(users, dict) and users.get("excludeGroups") and not groups:
+        found.append("excluded groups that cannot be read")
+    if len(groups) > MAX_BREAK_GLASS_GROUPS:
+        found.append(str(len(groups)) + " excluded groups (more than " + str(MAX_BREAK_GLASS_GROUPS) + ")")
+    elif groups and named:
+        found.append("an excluded group and excluded accounts (break-glass is at most " + str(MAX_BREAK_GLASS)
+                     + " accounts or " + str(MAX_BREAK_GLASS_GROUPS) + " group)")
+    if listed(users, "excludeRoles"):
+        found.append(str(len(listed(users, "excludeRoles"))) + " excluded directory role(s)")
+    if "guestsorexternalusers" in excluded or (isinstance(users, dict) and users.get("excludeGuestsOrExternalUsers")):
+        found.append("excluded guests or external users")
+    if "all" in excluded:
+        found.append("all users excluded")
+    if len(named) > MAX_BREAK_GLASS:
+        found.append(str(len(named)) + " excluded accounts (more than " + str(MAX_BREAK_GLASS) + ")")
+    return found, named, groups
+
+
+def policy_covers_admin_roles(policy):
+    """The SECURITY_ADMIN_ROLES ids this policy targets, or [] when it does not apply to every admin sign-in."""
+    conditions = policy.get("conditions")
+    if not isinstance(conditions, dict):
+        return []
+    applications = conditions.get("applications")
+    apps = listed(applications, "includeApplications")
+    if len([a for a in apps if a in ADMIN_APPS]) == 0:
+        return []
+    if [a for a in folded(listed(applications, "excludeApplications")) if a in ADMIN_SURFACE_EXCLUSIONS]:
+        return []
+    if listed(conditions, "userRiskLevels") or listed(conditions, "signInRiskLevels"):
+        return []
+    users = conditions.get("users")
+    include_users = listed(users, "includeUsers")
+    include_roles = listed(users, "includeRoles")
+    exclude_roles = listed(users, "excludeRoles")
     covered = []
-
-    # Path 1: Policy targets "All" users - check that admin roles are not excluded
-    if "All" in include_users:
-        for role_id in SECURITY_ADMIN_ROLES:
-            if role_id not in exclude_roles:
-                covered.append(SECURITY_ADMIN_ROLES[role_id])
-
-    # Path 2: Policy explicitly includes admin role IDs or targets "All" roles
-    if not covered:
-        if "All" in include_roles:
-            for role_id in SECURITY_ADMIN_ROLES:
-                if role_id not in exclude_roles:
-                    covered.append(SECURITY_ADMIN_ROLES[role_id])
-        else:
-            for role_id in include_roles:
-                if role_id in SECURITY_ADMIN_ROLES:
-                    covered.append(SECURITY_ADMIN_ROLES[role_id])
-
+    for role_id in SECURITY_ADMIN_ROLES:
+        if role_id in exclude_roles:
+            continue
+        if "All" in include_users or "All" in include_roles or role_id in include_roles:
+            covered.append(role_id)
     return covered
 
 
+def not_measured(reason, validation=None):
+    return create_response(result={"isMFAConfiguredForSecurityAdmins": None, "matchingPolicies": None,
+                                   "coveredRoles": None},
+                           validation=validation, fail_reasons=[reason], api_errors=[reason])
+
+
 def transform(input):
+    """True only when every one of the six SECURITY_ADMIN_ROLES is covered by an enabled Conditional Access
+    policy that requires MFA (builtInControls "mfa" or an authenticationStrength) for every cloud app or the
+    Microsoft Admin Portals, with neither the admin portals nor the Microsoft Azure Management app in
+    excludeApplications, without excluding the role and without being limited to risky sign-ins. All six
+    are on Microsoft's minimum list for that policy. False names the roles left uncovered. None, with
+    dataCollection.status "error": the policy list was not read, a partial page (@odata.nextLink) leaves a
+    role uncovered, or the transformation failed.
+    """
     criteriaKey = "isMFAConfiguredForSecurityAdmins"
 
     try:
@@ -289,11 +445,7 @@ def transform(input):
         validation = extracted["validation"]
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
+            return not_measured("Input validation failed", validation)
 
         # Extract policies from the conditional access response. The #101 workflow merges it under
         # conditionalAccessPolicies next to the per-account reads; it is unwrapped exactly as a bare body is.
@@ -301,13 +453,14 @@ def transform(input):
         if isinstance(data, dict) and "conditionalAccessPolicies" in data:
             accounts_data = data
             data = extract_input(data.get("conditionalAccessPolicies"))["data"]
-        policies = []
-        if isinstance(data, dict):
-            policies = data.get("value", [])
-            if not isinstance(policies, list):
-                policies = []
+        partial = False
+        if isinstance(data, dict) and isinstance(data.get("value"), list) and not data.get("error"):
+            policies = data.get("value")
+            partial = bool(data.get("@odata.nextLink"))
         elif isinstance(data, list):
             policies = data
+        else:
+            return not_measured("The Conditional Access policy list was not read", validation)
 
         pass_reasons = []
         fail_reasons = []
@@ -316,14 +469,21 @@ def transform(input):
 
         matching_policies = []
         report_only_policies = []
-        all_covered_roles = []
+        narrowed_policies = []
+        covered_ids = []
+        narrowed_out = []
+        location_excluded = []
+        unproven_policies = []
+        unproven_ids = []
+        excluded_accounts = []
+        excluded_groups = []
 
         for policy in policies:
             if not isinstance(policy, dict):
                 continue
 
-            state = (policy.get("state", "") or "").lower()
-            name = policy.get("displayName", "unnamed")
+            state = str(policy.get("state") or "").lower()
+            name = str(policy.get("displayName") or policy.get("id") or "unnamed")
 
             if not policy_requires_mfa(policy):
                 continue
@@ -333,53 +493,121 @@ def transform(input):
                 continue
 
             if state == "enabled":
+                strict = strict_narrowing(policy)
+                if strict:
+                    for location in excluded_locations(policy):
+                        if location not in location_excluded:
+                            location_excluded.append(location)
+                    narrowed_out.append(name + " (" + "; ".join(strict) + ")")
+                    continue
+                problems, named, groups = exclusion_problems(policy)
+                if problems:
+                    unproven_policies.append(name + " (" + "; ".join(problems) + ")")
+                    for role_id in covered_roles:
+                        if role_id not in unproven_ids:
+                            unproven_ids.append(role_id)
+                    continue
+                for account in named:
+                    if account not in excluded_accounts:
+                        excluded_accounts.append(account)
+                for group in groups:
+                    if group not in excluded_groups:
+                        excluded_groups.append(group)
                 matching_policies.append(name)
-                for role_name in covered_roles:
-                    if role_name not in all_covered_roles:
-                        all_covered_roles.append(role_name)
+                narrowing = narrowing_conditions(policy)
+                if narrowing:
+                    narrowed_policies.append(name + " (" + "; ".join(narrowing) + ")")
+                for role_id in covered_roles:
+                    if role_id not in covered_ids:
+                        covered_ids.append(role_id)
             elif state == "enabledforreportingbutnotenforced":
                 report_only_policies.append(name)
 
-        is_configured = len(matching_policies) > 0
+        all_covered_roles = [SECURITY_ADMIN_ROLES[r] for r in SECURITY_ADMIN_ROLES if r in covered_ids]
+        uncovered = [SECURITY_ADMIN_ROLES[r] for r in SECURITY_ADMIN_ROLES if r not in covered_ids]
+        if uncovered and partial:
+            return not_measured("Only a partial page of Conditional Access policies was returned and it does not "
+                                "cover every security admin role", validation)
+        if uncovered and all(r in unproven_ids for r in SECURITY_ADMIN_ROLES if r not in covered_ids):
+            return not_measured("MFA policies reach " + ", ".join(uncovered) + " only with exclusions beyond break-glass (at most "
+                                + str(MAX_BREAK_GLASS) + " named accounts or " + str(MAX_BREAK_GLASS_GROUPS)
+                                + " group), so coverage cannot be "
+                                "confirmed (group and role membership is not read): " + "; ".join(unproven_policies),
+                                validation)
+        if not uncovered and len(excluded_accounts) > MAX_BREAK_GLASS:
+            return not_measured("The policies that cover the security admin roles exclude "
+                                + str(len(excluded_accounts)) + " named accounts in total, more than "
+                                + str(MAX_BREAK_GLASS) + " emergency-access accounts, so coverage cannot be confirmed",
+                                validation)
+        if not uncovered and (len(excluded_groups) > MAX_BREAK_GLASS_GROUPS or (excluded_groups and excluded_accounts)):
+            return not_measured("The policies that cover the security admin roles exclude "
+                                + str(len(excluded_groups)) + " group(s) and " + str(len(excluded_accounts))
+                                + " named account(s) in total, more than break-glass (at most " + str(MAX_BREAK_GLASS)
+                                + " accounts or " + str(MAX_BREAK_GLASS_GROUPS) + " group), so coverage cannot be "
+                                "confirmed (group membership is not read)", validation)
+        is_configured = not uncovered
 
         if is_configured:
             pass_reasons.append(
-                str(len(matching_policies)) + " enabled Conditional Access policy/policies require MFA for security admins"
+                str(len(matching_policies)) + " enabled Conditional Access policy/policies require MFA for all "
+                + str(len(SECURITY_ADMIN_ROLES)) + " security admin roles"
             )
             for pname in matching_policies:
                 pass_reasons.append("Policy: " + str(pname))
             pass_reasons.append("Covered roles: " + ", ".join(all_covered_roles))
-
-            # Check if any security admin roles are NOT covered
-            uncovered = []
-            for role_id in SECURITY_ADMIN_ROLES:
-                rname = SECURITY_ADMIN_ROLES[role_id]
-                if rname not in all_covered_roles:
-                    uncovered.append(rname)
-            if uncovered:
-                additional_findings.append("Roles not explicitly covered: " + ", ".join(uncovered))
+            if excluded_accounts or excluded_groups:
+                pass_reasons.append("Excluded as break-glass (at most " + str(MAX_BREAK_GLASS) + " accounts or "
+                                    + str(MAX_BREAK_GLASS_GROUPS) + " group): "
+                                    + name_list(["user:" + a[:64] for a in excluded_accounts]
+                                                + ["group:" + g[:64] for g in excluded_groups]))
         else:
-            fail_reasons.append("No enabled Conditional Access policy requires MFA for security admin roles")
+            fail_reasons.append(
+                str(len(all_covered_roles)) + " of " + str(len(SECURITY_ADMIN_ROLES)) + " security admin roles "
+                "require MFA through an enabled Conditional Access policy; not covered: " + ", ".join(uncovered)
+            )
+            if location_excluded:
+                fail_reasons.append(
+                    "MFA policies for the security admin roles exclude " + str(len(location_excluded)) + " location(s), "
+                    "so MFA is skipped for sign-ins from them"
+                )
             recommendations.append(
-                "Create a Conditional Access policy that requires MFA and targets security admin roles "
-                "(Global Admin, Security Admin, Conditional Access Admin, Privileged Role Admin, Authentication Admin)"
+                "Enable a Conditional Access policy that requires MFA for all resources and targets every security "
+                "admin role (Global, Security, Conditional Access, Privileged Role, Authentication and Privileged "
+                "Authentication Administrator), excluding no locations"
             )
 
         if report_only_policies:
             additional_findings.append(
                 "Report-only (not enforced) MFA policies targeting admins: " + ", ".join(report_only_policies)
             )
+        if narrowed_out:
+            additional_findings.append(
+                "MFA policies for admins that do not count because they reach only some sign-ins: "
+                + "; ".join(narrowed_out)
+            )
+        if unproven_policies:
+            additional_findings.append(
+                "MFA policies for admins that do not count because their exclusions go beyond break-glass (at most "
+                + str(MAX_BREAK_GLASS) + " named accounts or " + str(MAX_BREAK_GLASS_GROUPS) + " group): "
+                + "; ".join(unproven_policies)
+            )
+        if narrowed_policies:
+            additional_findings.append(
+                "Counted policies that carry a condition this check does not judge, so they may reach only part "
+                "of admin sign-ins: " + "; ".join(narrowed_policies)
+            )
 
         input_summary = {
             "totalPolicies": len(policies),
             "enabledMfaAdminPolicies": len(matching_policies),
             "reportOnlyMfaAdminPolicies": len(report_only_policies),
+            "narrowedMfaAdminPolicies": narrowed_policies,
             "coveredRoleCount": len(all_covered_roles),
+            "uncoveredRoles": uncovered,
         }
         accounts = None
         if accounts_data is not None:
-            accounts = named_accounts(accounts_data, [r for r in SECURITY_ADMIN_ROLES
-                                                      if SECURITY_ADMIN_ROLES[r] not in all_covered_roles])
+            accounts = named_accounts(accounts_data, [r for r in SECURITY_ADMIN_ROLES if r not in covered_ids])
         if accounts is not None:
             line = accounts_line(accounts, "active holders of the security admin roles this check targets",
                                  "security admin role holders lack enforced or registered MFA")
@@ -404,9 +632,4 @@ def transform(input):
         )
 
     except Exception as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=["Transformation error: " + str(e)]
-        )
+        return not_measured("Transformation error: " + str(e))

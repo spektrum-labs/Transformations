@@ -2,6 +2,9 @@ import json
 from datetime import datetime
 
 
+CRITERIA_KEY = "isBareMetalRecoveryEnabled"
+
+
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
@@ -30,9 +33,14 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
-    api_err_list = api_errors or []
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, missing field, transform raised) and must not be graded.
+    value = result.get(CRITERIA_KEY) if isinstance(result, dict) else None
+    measured = value is not None
+    api_err_list = [] if measured else (api_errors or transformation_errors or fail_reasons
+                                        or [CRITERIA_KEY + " could not be measured from the response"])
     transform_err_list = transformation_errors or []
-    data_collection_status = "error" if api_err_list else "success"
+    data_collection_status = "success" if measured else "error"
     transformation_status = "error" if transform_err_list else "success"
     response_metadata = {
         "evaluatedAt": datetime.utcnow().isoformat() + "Z",
@@ -65,7 +73,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def transform(input):
+def evaluate(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
@@ -81,18 +89,25 @@ def transform(input):
     total_plans = len(plans)
     entire_machine_plans = []
     entire_machine_enabled_plans = []
+    plans_with_backup_type = 0
 
     for plan in plans:
         if not isinstance(plan, dict):
             continue
         backup_details = plan.get("backup_details") or {}
         what_to_backup = backup_details.get("what_to_backup") if isinstance(backup_details, dict) else None
+        if what_to_backup is not None:
+            plans_with_backup_type += 1
         if what_to_backup == "ENTIRE_MACHINE":
             entire_machine_plans.append(plan)
             if plan.get("is_enabled"):
                 entire_machine_enabled_plans.append(plan)
 
     is_enabled = len(entire_machine_enabled_plans) > 0
+    if plans_with_backup_type == 0:
+        # No plan carries backup_details.what_to_backup (no plans, empty body, refusal):
+        # the backup type was never measured, so the criterion is None, not False.
+        is_enabled = None
 
     input_summary = {
         "totalPlans": total_plans,
@@ -113,6 +128,8 @@ def transform(input):
         pass_reasons = []
         if total_plans == 0:
             fail_reasons = ["No backup plans were returned by the API for this company."]
+        elif is_enabled is None:
+            fail_reasons = ["No backup plan in the response carries backup_details.what_to_backup; bare metal backup could not be evaluated."]
         elif len(entire_machine_plans) == 0:
             backup_types = [
                 (p.get("backup_details") or {}).get("what_to_backup") for p in plans if isinstance(p, dict)
@@ -149,3 +166,15 @@ def transform(input):
             "category": "backup",
         },
     )
+
+
+def transform(input):
+    try:
+        return evaluate(input)
+    except Exception as e:
+        return create_response(
+            result={CRITERIA_KEY: None},
+            fail_reasons=["Transformation error: " + str(e)],
+            transformation_errors=["Transformation error: " + str(e)],
+            metadata={"transformationId": CRITERIA_KEY, "vendor": "IDrive", "category": "backup"},
+        )

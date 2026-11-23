@@ -1,5 +1,6 @@
 import json
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 
 # ---- fail-closed guard (2026-10-03) ------------------------------------------------------------
 # A read that proves nothing about the estate is Unevaluated: every key None plus a dataCollection
@@ -266,6 +267,55 @@ def unevaluated(problem, validation=None, transformation_errors=None, input_summ
     )
 
 
+# A host counts as reporting only when its last_seen is within this many days of the response's
+# clock. The same window, clock and rule are written identically in requiredCoveragePercentage.py,
+# isEPPConfiguredFromHosts.py, isEDRDeployed.py and isPatchManagementEnabledFromHosts.py, so every
+# CrowdStrike host check agrees on which hosts are reporting.
+# It matches the 15-day endpoint rule the Sophos and NinjaOne checks already apply.
+ACTIVE_WINDOW_DAYS = 15
+
+
+def parse_time(value):
+    """An ISO timestamp (seconds, any fraction, then Z, an explicit offset, or nothing) as naive UTC.
+    Falcon sends Z; an offset is converted rather than dropped. None if unreadable."""
+    if not isinstance(value, str):
+        return None
+    match = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$", value.strip())
+    if not match:
+        return None
+    try:
+        when = datetime.fromisoformat(match.group(1))
+    except ValueError:
+        return None
+    offset = match.group(3)
+    if offset and offset != "Z":
+        shift = timedelta(hours=int(offset[1:3]), minutes=int(offset[4:6]))
+        when = when - shift if offset[0] == "+" else when + shift
+    return when
+
+
+def reference_clock(devices):
+    """The newest last_seen in the response, so a scan of cached data judges hosts against the data's
+    own time. When that newest check-in is itself older than the window the whole fleet is dark, and
+    the wall clock is used so every host is stale rather than every host fresh."""
+    known = [parse_time(d.get("last_seen")) for d in devices if isinstance(d, dict)]
+    known = [t for t in known if t is not None]
+    wall = datetime.utcnow()
+    if not known:
+        return wall
+    # Capped at the wall clock: one future-dated record must not make every real host stale.
+    newest = min(max(known), wall)
+    if newest < wall - timedelta(days=ACTIVE_WINDOW_DAYS):
+        return wall
+    return newest
+
+
+def is_reporting(device, clock):
+    """A missing or unreadable last_seen is not reporting, never reporting."""
+    seen = parse_time(device.get("last_seen"))
+    return seen is not None and seen >= clock - timedelta(days=ACTIVE_WINDOW_DAYS)
+
+
 def transform(input):
     try:
         return evaluate(input)
@@ -293,6 +343,7 @@ def evaluate(input):
                            "body of getLicenseStatus): nothing was measured", validation)
 
     total_devices = len(resources)
+    clock = reference_clock(resources)
     deployed_count = 0
     rfm_count = 0
     stale_count = 0
@@ -310,11 +361,12 @@ def evaluate(input):
         device_policies = device.get("device_policies") or {}
         has_sensor_update_policy = isinstance(device_policies, dict) and bool(device_policies.get("sensor_update"))
         agent_version = device.get("agent_version")
-        last_seen = device.get("last_seen")
+        reporting = is_reporting(device, clock)
 
         if rfm_is_true:
             rfm_count = rfm_count + 1
-        sensor_evidence = bool(agent_version) and has_sensor_update_policy
+        # A sensor that has not checked in within the window is not streaming anything now.
+        sensor_evidence = bool(agent_version) and has_sensor_update_policy and reporting
         if state == "unknown":
             unknown_rfm_count = unknown_rfm_count + 1
             if sensor_evidence:
@@ -328,7 +380,7 @@ def evaluate(input):
             deployed_count = deployed_count + 1
             if len(sample_hosts) < 5:
                 sample_hosts.append(device.get("hostname") or device.get("device_id") or "unknown")
-        elif not last_seen:
+        elif not reporting:
             stale_count = stale_count + 1
 
     is_edr_deployed = total_devices > 0 and deployed_count > 0
@@ -338,6 +390,9 @@ def evaluate(input):
         "deployedCount": deployed_count,
         "rfmCount": rfm_count,
     }
+    if stale_count > 0:
+        input_summary["notReportingCount"] = stale_count
+        input_summary["activeWindowDays"] = ACTIVE_WINDOW_DAYS
     unknown_note = ""
     if unknown_rfm_count > 0:
         input_summary["rfmUnknownCount"] = unknown_rfm_count
@@ -364,16 +419,18 @@ def evaluate(input):
 
     if is_edr_deployed:
         pass_reasons = [
-            f"{deployed_count} of {total_devices} devices are not in Reduced Functionality Mode (reduced_functionality_mode \"no\"/false, or not reported), report a populated agent_version, and have an assigned sensor_update policy (e.g. {', '.join([str(h) for h in sample_hosts])}), confirming the Falcon sensor is installed and actively streaming EDR telemetry."
+            f"{deployed_count} of {total_devices} devices are not in Reduced Functionality Mode (reduced_functionality_mode \"no\"/false, or not reported), report a populated agent_version, have an assigned sensor_update policy, and checked in within {ACTIVE_WINDOW_DAYS} days of the newest check-in ({clock.isoformat()}Z) (e.g. {', '.join([str(h) for h in sample_hosts])}), confirming the Falcon sensor is installed and streaming EDR telemetry."
         ]
         fail_reasons = []
         recommendations = []
         if rfm_count > 0:
             recommendations.append(f"{rfm_count} device(s) are in Reduced Functionality Mode; investigate connectivity/licensing issues for those hosts to restore full EDR telemetry.")
+        if stale_count > 0:
+            additional_findings.append(f"{stale_count} device(s) have not checked in within {ACTIVE_WINDOW_DAYS} days of the newest check-in ({clock.isoformat()}Z), or have no readable last_seen, and were not counted as streaming.")
     else:
         pass_reasons = []
         fail_reasons = [
-            f"None of the {total_devices} devices returned by getDeviceDetails are out of Reduced Functionality Mode (reduced_functionality_mode \"no\"/false, or not reported) with an assigned sensor_update policy and a populated agent_version, so EDR telemetry cannot be confirmed as active."
+            f"None of the {total_devices} devices returned by getDeviceDetails are out of Reduced Functionality Mode (reduced_functionality_mode \"no\"/false, or not reported) with an assigned sensor_update policy, a populated agent_version and a check-in within {ACTIVE_WINDOW_DAYS} days of the newest check-in ({stale_count} not reporting), so EDR telemetry cannot be confirmed as active."
         ]
         recommendations = ["Investigate why Falcon sensors are reporting Reduced Functionality Mode or missing sensor_update policy assignment; reinstall or re-license affected sensors to restore full EDR streaming."]
 

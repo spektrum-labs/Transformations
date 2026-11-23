@@ -1,5 +1,5 @@
 """isStrongAuthRequired for Microsoft Entra ID (Azure AD One-Click), from the authentication methods policy
-(GET /v1.0/policies/authenticationMethodsPolicy, the One-Click method getEstateMFAStatus).
+(GET /v1.0/policies/authenticationMethodsPolicy, the One-Click MFA status method).
 
 Why a new file: the One-Click definition ran d9b6f27a/isstrongauthrequired.py on getUsers (a bare
 /v1.0/users page). That transform looks for objects with status "active", which user records never

@@ -64,11 +64,29 @@ def safe_dict(val):
 def evaluate(data):
     criteriaKey = "isSAMLEnforced"
 
+    if not isinstance(data, dict):
+        return {criteriaKey: None, "error": "no org settings object in the API response"}
+
     org_security = safe_dict(data.get("orgSecurity"))
 
+    # CrashPlan's real org record (GET /api/v1/Org/{orgId}?incSettings=true) carries none of the
+    # authType/ssoEnabled/samlEnabled fields below. What it does carry is
+    # settingsSummary.ssoIdentityProviderUids: the SSO identity providers assigned to the org, which
+    # every user of the org not flagged localAuthenticationOnly must sign in through. The integration
+    # returns settingsSummary under "securitySettings".
+    if not org_security:
+        org_security = safe_dict(data.get("securitySettings"))
+
     if not org_security and isinstance(data, dict):
-        if "authType" in data or "authenticationMethod" in data or "ssoEnabled" in data or "samlEnabled" in data:
+        if ("authType" in data or "authenticationMethod" in data or "ssoEnabled" in data
+                or "samlEnabled" in data or "ssoIdentityProviderUids" in data):
             org_security = data
+
+    sso_idp_uids = org_security.get("ssoIdentityProviderUids")
+    if isinstance(sso_idp_uids, list):
+        idp_count = len([u for u in sso_idp_uids if u])
+        return {criteriaKey: idp_count > 0, "ssoIdentityProviderCount": idp_count,
+                "detectionMethod": "ssoIdentityProviderUids"}
 
     auth_type_raw = org_security.get("authType")
     auth_method_raw = org_security.get("authenticationMethod")
@@ -160,7 +178,7 @@ def transform(input):
             fail_reasons.append("Could not determine SAML enforcement status")
             if "error" in eval_result:
                 fail_reasons.append(eval_result["error"])
-            recommendations.append("Verify that the getOrgSecurity endpoint is reachable and returns OrgSecurity data")
+            recommendations.append("Verify that the org settings endpoint (/api/v1/Org/{orgId}?incSettings=true) is reachable and returns settingsSummary")
 
         return create_response(
             result={criteriaKey: result_value, **extra_fields},
@@ -172,8 +190,9 @@ def transform(input):
             additional_findings=additional_findings
         )
     except Exception as e:
+        # Nothing was read, so nothing is known: None (not evaluated), never False (a gap from no data).
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=["Transformation error: " + str(e)]

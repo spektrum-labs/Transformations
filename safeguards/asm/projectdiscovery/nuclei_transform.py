@@ -8,10 +8,35 @@ critical or high severity findings are present for a scanned domain.
 
 A capped scan (more hosts discovered than scanned, the ASM host cap) that found no critical or high
 finding returns None for both keys with the coverage reason in dataCollection.errors: zero findings on a
-partial estate is not a clean estate, so Token-Service reads it as Unevaluated, never a pass. A capped scan
+partial estate is not proof of no findings in scope, so Token-Service reads it as Unevaluated, never a pass. A capped scan
 that did find a critical or high finding still fails, with the coverage named in failReasons. Each row reads
 one key from a single-severity scan (noCriticalFindings from the critical scan, noHighFindings from the high
 scan), so a response is only ever read for the key whose severity it scanned.
+
+A scan the Integration Service has no result for (status "error" with a reason such as asm_scan_in_progress or
+asm_scan_retry_backoff) returns None for both keys, and the reason is passed on as dataCollection.errorCode, so
+a scan that is still running is not mistaken for a failed one. Every error path returns None with the reason
+in dataCollection.errors, never False: any other reason, no reason, a malformed reason, an input that failed
+validation, a scan with zero or failed hosts, and an exception inside the transform.
+
+Unresponsive surface (29 Oct 2026): the Integration Service lists hosts whose scan batches failed under
+``unresponsiveHosts`` (asm_scan_reuse section 11), each with the ``reason`` of its latest failure
+(``scan_timed_out``: the scanner's batch hit its own time limit on that host; ``scan_error``: the scanner
+errored) and ``consecutiveTimeouts``, which counts timed-out and errored batches together and only advances
+a refresh apart, so 2 means two runs at least a nightly apart. A host that failed on two consecutive runs and
+timed out on the latest is excluded from the surface the keys are evaluated on: when every host the scan did
+not cover is such a host, there are few of them (MAX_EXCLUDED_PERCENT of the discovered hosts, one always
+allowed, the Integration Service's own unresponsive ceiling: past it the gap is the scanner's, the network's
+or a deliberate blackhole), and the arithmetic is exact (``domainResults`` is a list whose length is the
+scanned count and, with the excluded hosts, equals the discovered count; the scan was not cut short by its
+time limit), the keys are evaluated on the hosts that were scanned and the excluded hosts are named in
+passReasons, the result and inputSummary. Anything else keeps the partial rule (None): a first failure (the
+continuation retries it), a host whose latest failure was a ``scan_error``, a host both listed and scanned,
+an entry without a host name, a missing or malformed ``domainResults``, a time-limited scan, a host-capped
+scan, too many excluded hosts, or a gap the excluded hosts do not explain. The entry's ``retried`` flag is
+NOT read: IS sets it as a retry-budget marker when a continuation reported the host failed again, but also
+when the continuation ran out without reaching it or added nothing storable (including a refusal over the
+unresponsive ceiling, a systemic failure), so it is not evidence of a second observed failure.
 """
 
 import json
@@ -82,6 +107,106 @@ def to_int(value):
         return None
 
 
+CHRONIC_AFTER_FAILURES = 2  # asm_scan_reuse.CHRONIC_AFTER_FAILURES: consecutive nightlies after which a host is excluded
+# The most of an estate that may be excluded for the rest to be evaluated: the Integration Service's own
+# unresponsive ceiling (ASM_SCAN_UNRESPONSIVE_MAX_PERCENT, 10%, one host always allowed). Past it the gap is
+# the scanner's or the network's, or a deliberate blackhole, not a few hosts that never answer.
+MAX_EXCLUDED_PERCENT = 10
+EXCLUDABLE_REASON = "scan_timed_out"  # the scanner's batch timed out on the host; scan_error hosts are never excluded
+NAMED_HOSTS = 10            # how many hosts a reason line names
+HOST_NAME_MAX = 253         # a DNS name's maximum length; longer values are cut
+
+
+def is_true(value):
+    return value is True or str(value).strip().lower() == "true"
+
+
+def host_name(host):
+    """A non-empty, length-bounded host name from an unresponsiveHosts entry, else None."""
+    if not isinstance(host, dict):
+        return None
+    name = host.get("domain")
+    if not isinstance(name, str):
+        return None
+    name = name.strip()
+    return name[:HOST_NAME_MAX] if name else None
+
+
+def scanned_domains(data):
+    """The host names domainResults accounts for."""
+    out = set()
+    for r in data.get("domainResults") or []:
+        if isinstance(r, dict) and isinstance(r.get("domain"), str) and r.get("domain").strip():
+            out.add(r["domain"].strip()[:HOST_NAME_MAX])
+    return out
+
+
+def unresponsive_hosts(data):
+    """(excluded, pending, unexplained): the hosts the Integration Service lists as unresponsive.
+
+    excluded: unique names that failed on CHRONIC_AFTER_FAILURES consecutive runs (IS counts timed-out and
+    errored batches together) and timed out on the latest (reason scan_timed_out), and that domainResults
+    does not also account for. pending: every other named host (a first failure, a host whose latest failure
+    was a scan_error, a host that is also in domainResults). unexplained: entries with no usable host name;
+    they explain no part of the gap, so the surface rule fails. A name listed twice is kept once, on its
+    first listing (IS never emits duplicates; the dedupe is defensive)."""
+    excluded = []
+    pending = []
+    unexplained = 0
+    seen = set()
+    scanned = scanned_domains(data)
+    hosts = data.get("unresponsiveHosts")
+    for host in hosts if isinstance(hosts, list) else []:
+        name = host_name(host)
+        if name is None:
+            unexplained += 1
+            continue
+        if name in seen:
+            continue
+        seen.add(name)
+        failures = to_int(host.get("consecutiveTimeouts")) or 0
+        timed_out = str(host.get("reason") or "").strip() == EXCLUDABLE_REASON
+        if failures >= CHRONIC_AFTER_FAILURES and timed_out and name not in scanned:
+            excluded.append(name)
+        else:
+            pending.append(name)
+    return excluded, pending, unexplained
+
+
+def excluded_allowed(discovered):
+    """How many of ``discovered`` hosts may be excluded (MAX_EXCLUDED_PERCENT; at least one)."""
+    return max(1, discovered * MAX_EXCLUDED_PERCENT // 100)
+
+
+def unresponsive_surface(data, excluded, pending, unexplained):
+    """True when the scan covered every discovered host that the scanner can reach: the only hosts it did
+    not scan are the excluded ones, there are few of them (``excluded_allowed``), ``domainResults`` is a list
+    of uniquely named hosts whose length is the scanned count, the counts agree exactly, and the scan was
+    not cut short."""
+    if pending or unexplained or not excluded:
+        return False
+    if is_true(data.get("scanTimeLimited")):
+        return False
+    scanned = to_int(data.get("domainsScanned"))
+    discovered = to_int(data.get("totalDiscovered"))
+    if scanned is None or discovered is None or scanned <= 0:
+        return False
+    if len(excluded) > excluded_allowed(discovered):
+        return False
+    results = data.get("domainResults")
+    if not isinstance(results, list) or scanned != len(results) or scanned != len(scanned_domains(data)):
+        # No per-host list, one that disagrees with the count, or one whose host names are not unique: the
+        # overlap and arithmetic checks cannot be made, so the partial rule stands (IS's own
+        # _honest_unresponsive_partial refuses a non-list too).
+        return False
+    return scanned + len(excluded) == discovered
+
+
+def named(hosts):
+    shown = ", ".join(hosts[:NAMED_HOSTS])
+    return shown + (" and " + str(len(hosts) - NAMED_HOSTS) + " more" if len(hosts) > NAMED_HOSTS else "")
+
+
 def capped_note(data):
     """The reason a zero would be partial (more hosts discovered than scanned), else None."""
     scanned = to_int(data.get("domainsScanned"))
@@ -95,6 +220,162 @@ def capped_note(data):
             + " were scanned")
 
 
+# --- scan reason ----------------------------------------------------------------------------------------
+# The Integration Service answers a scan it has no result for as {"status": "error", "reason": "<code>",
+# "message": ...}: asm_scan_in_progress (a scan is still running), asm_scan_retry_backoff (the last scan
+# produced nothing usable, so no new scan was started), asm_scan_shared_no_result and
+# asm_scan_max_duration_exceeded. The code is passed on as dataCollection.errorCode, so a reader can tell a scan
+# that is still running from a broken integration. An error reply measured nothing, so the criterion is None
+# (Not evaluated), never False, whatever the reason: an asm_scan_ code, any other code, no reason, or a reason
+# that is not a plain code (that one is dropped, and the text stays generic).
+SCAN_REASON_MAX_LENGTH = 60
+SCAN_REASON_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_"
+SCAN_REASON_TEXT = {
+    "asm_scan_in_progress": "the scan is still running; its result is read on the next evaluation",
+    "asm_scan_retry_backoff": "the last scan produced no usable result, so a new scan has not started yet",
+    "asm_scan_shared_no_result": "the scan that was already running produced no usable result",
+    "asm_scan_max_duration_exceeded": "the scan ran past its time limit",
+}
+
+
+def scan_reason(data):
+    """The reason code of a scan reply that is not a result: a plain lower-case code of at most 60 characters,
+    else None (a successful scan, no reason, or a reason that is not a plain code)."""
+    if not isinstance(data, dict) or data.get("status") == "success":
+        return None
+    reason = data.get("reason")
+    if not isinstance(reason, str):
+        return None
+    reason = reason.strip().lower()
+    if not reason or len(reason) > SCAN_REASON_MAX_LENGTH:
+        return None
+    for ch in reason:
+        if ch not in SCAN_REASON_CHARS:
+            return None
+    return reason
+
+
+def scan_status_problem(status, domain, reason):
+    """The error text for a scan reply that is not a result."""
+    if reason is None:
+        return "Nuclei scan status: " + str(status) + " for " + str(domain)
+    if reason.startswith("asm_scan_"):
+        return ("Nuclei scan not evaluated (" + reason + "): "
+                + SCAN_REASON_TEXT.get(reason, "the scan did not produce a result"))
+    return "Nuclei scan status: " + str(status) + " (" + reason + ") for " + str(domain)
+
+
+def with_error_code(response, error_code):
+    """Label a reply with the reason code the Integration Service gave, when it gave one."""
+    if error_code:
+        response["additionalInfo"]["dataCollection"]["errorCode"] = error_code
+    return response
+# --- end scan reason -------------------------------------------------------------------------------------
+
+
+# --- evidenceItems (gap disputes) -----------------------------------------------------------------------
+# Each offending finding becomes {fingerprint, kind, label, severity}. The fingerprint is the identity of the
+# thing found, so a rescan with different counts or timestamps yields the same value and a new finding a new one:
+#   fingerprint = sha256_hex(template-id + "|" + scheme://host[:port] + path)
+# When a finding carries a matcher-name the template part is template-id + "#" + matcher-name, so two matchers of
+# one template on one URL stay distinct; without a matcher-name the form above is unchanged.
+# Normalisation of the finding's matched-at (host as a fallback): scheme and host lower-cased; userinfo, query
+# string and fragment removed; the default port (80 for http, 443 for https) and a trailing dot on the host
+# removed; trailing slashes removed from the path, so the root path is "" and https://h/ equals https://h; the
+# path keeps its case and its percent-encoding. A value with no scheme gets the scheme "unknown". The sandbox
+# allows no hashlib, so SHA-256 is implemented here; this block is identical in every ProjectDiscovery file and
+# test_evidence_items.py checks it against hashlib.
+SHA256_K = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2]
+
+
+def rotr32(x, n):
+    return ((x >> n) | (x << (32 - n))) & 0xffffffff
+
+
+def sha256_hex(text):
+    data = list(str(text).encode("utf-8"))
+    bit_length = len(data) * 8
+    data = data + [0x80]
+    while len(data) % 64 != 56:
+        data = data + [0]
+    data = data + [(bit_length >> (8 * (7 - i))) & 0xff for i in range(8)]
+    h = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]
+    for start in range(0, len(data), 64):
+        w = [(data[start + 4 * i] << 24) | (data[start + 4 * i + 1] << 16) | (data[start + 4 * i + 2] << 8)
+             | data[start + 4 * i + 3] for i in range(16)]
+        for i in range(16, 64):
+            s0 = rotr32(w[i - 15], 7) ^ rotr32(w[i - 15], 18) ^ (w[i - 15] >> 3)
+            s1 = rotr32(w[i - 2], 17) ^ rotr32(w[i - 2], 19) ^ (w[i - 2] >> 10)
+            w = w + [(w[i - 16] + s0 + w[i - 7] + s1) & 0xffffffff]
+        a, b, c, d, e, f, g, hh = h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]
+        for i in range(64):
+            t1 = (hh + (rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25)) + ((e & f) ^ ((e ^ 0xffffffff) & g))
+                  + SHA256_K[i] + w[i]) & 0xffffffff
+            t2 = ((rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) & 0xffffffff
+            hh, g, f, e, d, c, b, a = g, f, e, (d + t1) & 0xffffffff, c, b, a, (t1 + t2) & 0xffffffff
+        h = [(h[0] + a) & 0xffffffff, (h[1] + b) & 0xffffffff, (h[2] + c) & 0xffffffff, (h[3] + d) & 0xffffffff,
+             (h[4] + e) & 0xffffffff, (h[5] + f) & 0xffffffff, (h[6] + g) & 0xffffffff, (h[7] + hh) & 0xffffffff]
+    digits = "0123456789abcdef"
+    return "".join(["".join([digits[(word >> shift) & 15] for shift in (28, 24, 20, 16, 12, 8, 4, 0)]) for word in h])
+
+
+def normalise_location(raw):
+    """(scheme, host, path) of a nuclei matched-at / host value, normalised as described above."""
+    text = str(raw or "").strip().split("#")[0].split("?")[0]
+    scheme = "unknown"
+    if "://" in text:
+        scheme, text = text.split("://", 1)
+        scheme = scheme.strip().lower() or "unknown"
+    slash = text.find("/")
+    authority = text if slash < 0 else text[:slash]
+    path = "" if slash < 0 else text[slash:]
+    authority = authority.split("@")[-1].strip().lower()
+    port = ""
+    if authority.startswith("["):
+        close = authority.find("]")
+        if close >= 0:
+            port = authority[close + 2:] if authority[close + 1:close + 2] == ":" else ""
+            authority = authority[:close + 1]
+    elif ":" in authority:
+        authority, port = authority.rsplit(":", 1)
+    authority = authority.rstrip(".")
+    if port and not ((scheme == "http" and port == "80") or (scheme == "https" and port == "443")):
+        authority = authority + ":" + port
+    return scheme, authority or "unknown", path.rstrip("/")
+
+
+def evidence_item(finding):
+    """One evidenceItems entry for an offending nuclei finding (see the block comment above)."""
+    info = finding.get("info") if isinstance(finding.get("info"), dict) else {}
+    template_id = str(finding.get("template-id") or info.get("name") or "unknown").strip()
+    scheme, host, path = normalise_location(finding.get("matched-at") or finding.get("host"))
+    sev = info.get("severity") or finding.get("severity")
+    matcher = str(finding.get("matcher-name") or "").strip()
+    if matcher:
+        template_id = template_id + "#" + matcher
+    return {"fingerprint": sha256_hex(template_id + "|" + scheme + "://" + host + path), "kind": "asm_finding",
+            "label": template_id + " at " + host + path, "severity": str(sev or "").strip().lower()}
+
+
+def evidence_items(findings):
+    """Unique evidenceItems for the offending findings, ordered by fingerprint so scan order never matters."""
+    seen = {}
+    for finding in findings:
+        if isinstance(finding, dict):
+            item = evidence_item(finding)
+            seen[item["fingerprint"]] = item
+    return [seen[key] for key in sorted(seen.keys())]
+# --- end evidenceItems -----------------------------------------------------------------------------------
+
+
 def transform(input):
     try:
         if isinstance(input, str):
@@ -105,10 +386,12 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
+            reason = "Input validation failed: the scan response did not match its schema, so the findings are unknown"
             return create_response(
-                result={"noCriticalFindings": False, "noHighFindings": False},
+                result={"noCriticalFindings": None, "noHighFindings": None},
                 validation=validation,
-                fail_reasons=["Input validation failed"]
+                api_errors=[reason],
+                fail_reasons=[reason]
             )
 
         pass_reasons = []
@@ -123,14 +406,25 @@ def transform(input):
         findings = data.get("findings", [])
         stderr = data.get("stderr", "")
 
-        # Check for scan errors
+        # Check for scan errors. A reply that carries a reason is labelled with it (dataCollection.errorCode);
+        # an asm_scan_ reason (still running, waiting to retry, ...) measured nothing, so both keys are None.
         if scan_status != "success":
-            return create_response(
-                result={"noCriticalFindings": False, "noHighFindings": False},
-                validation=validation,
-                api_errors=[f"Nuclei scan status: {scan_status}"],
-                fail_reasons=[f"Scan did not complete successfully for {domain}"],
-                input_summary={"domain": domain, "status": scan_status, "stderr": stderr}
+            reason_code = scan_reason(data)
+            if reason_code is None:
+                problem = f"Nuclei scan status: {scan_status}"
+                scan_fail_reason = f"Scan did not complete successfully for {domain}"
+            else:
+                problem = scan_status_problem(scan_status, domain, reason_code)
+                scan_fail_reason = problem
+            return with_error_code(
+                create_response(
+                    result={"noCriticalFindings": None, "noHighFindings": None},
+                    validation=validation,
+                    api_errors=[problem],
+                    fail_reasons=[scan_fail_reason],
+                    input_summary={"domain": domain, "status": scan_status, "stderr": stderr}
+                ),
+                reason_code
             )
 
         # A "success" that scanned nothing, or where a domain's scan errored, proves nothing:
@@ -145,29 +439,15 @@ def transform(input):
                 domains_scanned = int(str(data.get("domainsScanned")).strip())
             except (TypeError, ValueError):
                 domains_scanned = 0
-        if domains_scanned is not None and domains_scanned <= 0:
-            reason = f"Nuclei scanned zero domains for {domain}"
-        elif failed_domains or scan_errors:
-            reason = (f"Nuclei scan failed for {max(len(failed_domains), len(scan_errors))} "
-                      f"domain(s) of {domain}")
-        else:
-            reason = None
-        if reason:
-            return create_response(
-                result={"noCriticalFindings": False, "noHighFindings": False},
-                validation=validation,
-                api_errors=[reason],
-                fail_reasons=[reason],
-                input_summary={"domain": domain, "status": scan_status, "domainsScanned": domains_scanned,
-                               "failedDomains": failed_domains[:20], "errorCount": len(scan_errors)}
-            )
 
-        # Count findings by severity
+        # Count findings by severity (before the guard below, so a finding seen on a partial scan still fails)
         critical_count = 0
         high_count = 0
         medium_count = 0
         low_count = 0
         info_count = 0
+        critical_findings = []
+        high_findings = []
 
         for finding in findings:
             severity = ""
@@ -181,10 +461,12 @@ def transform(input):
 
             if severity == "critical":
                 critical_count += 1
+                critical_findings.append(finding)
                 finding_name = info.get("name", "Unknown") if isinstance(info, dict) else "Unknown"
                 additional_findings.append(f"CRITICAL: {finding_name}")
             elif severity == "high":
                 high_count += 1
+                high_findings.append(finding)
                 finding_name = info.get("name", "Unknown") if isinstance(info, dict) else "Unknown"
                 additional_findings.append(f"HIGH: {finding_name}")
             elif severity == "medium":
@@ -194,12 +476,53 @@ def transform(input):
             elif severity == "info":
                 info_count += 1
 
+        if domains_scanned is not None and domains_scanned <= 0:
+            reason = f"Nuclei scanned zero domains for {domain}"
+        elif failed_domains or scan_errors:
+            reason = (f"Nuclei scan failed for {max(len(failed_domains), len(scan_errors))} "
+                      f"domain(s) of {domain}")
+        else:
+            reason = None
+        if reason:
+            # A failed host can hide findings, so a clean answer is unknown (None). It cannot remove a finding
+            # actually seen on another host: a key with a finding keeps its measured False.
+            if domains_scanned is not None and domains_scanned <= 0:
+                critical_count = 0
+                high_count = 0
+            return create_response(
+                result={"noCriticalFindings": False if critical_count else None,
+                        "noHighFindings": False if high_count else None},
+                validation=validation,
+                api_errors=[reason],
+                fail_reasons=[reason],
+                input_summary={"domain": domain, "status": scan_status, "domainsScanned": domains_scanned,
+                               "failedDomains": failed_domains[:20], "errorCount": len(scan_errors),
+                               "criticalCount": critical_count, "highCount": high_count}
+            )
+
         no_critical = critical_count == 0
         no_high = high_count == 0
 
         capped = capped_note(data)
+        excluded, pending, unexplained = unresponsive_hosts(data)
+        complete_for_surface = bool(capped) and unresponsive_surface(data, excluded, pending, unexplained)
+        coverage_note = None
+        if complete_for_surface:
+            # The hosts not covered failed on two consecutive runs and timed out on the latest: they are
+            # excluded from the surface the keys are evaluated on, which is every other discovered host.
+            coverage_note = ("scans of " + str(len(excluded)) + " of " + str(to_int(data.get("totalDiscovered")))
+                             + " discovered host(s) of " + str(domain) + " failed on two consecutive runs, timing "
+                             + "out on the latest, and are excluded from the surface evaluated: " + named(excluded))
+            capped = None
         if capped and no_critical and no_high:
-            reason = capped + "; zero critical or high findings on a partial scan is not a clean estate"
+            reason = capped + "; zero critical or high findings on a partial scan is not proof of no findings in scope"
+            if pending:
+                reason += ("; " + str(len(pending)) + " host(s) failed this scan and will be retried: "
+                           + named(pending))
+            discovered = to_int(data.get("totalDiscovered"))
+            if excluded and discovered is not None and len(excluded) > excluded_allowed(discovered):
+                reason += ("; " + str(len(excluded)) + " host(s) have failed on repeated scans, more than the "
+                           + str(excluded_allowed(discovered)) + " this estate may exclude")
             return create_response(
                 result={"noCriticalFindings": None, "noHighFindings": None, "domain": domain},
                 validation=validation,
@@ -208,6 +531,7 @@ def transform(input):
                 input_summary={"domain": domain, "scanStatus": scan_status, "totalFindings": total_findings,
                                "domainsScanned": to_int(data.get("domainsScanned")),
                                "totalDiscovered": to_int(data.get("totalDiscovered")),
+                               "unresponsiveHostsPending": pending[:20], "unresponsiveHostsExcluded": excluded[:20],
                                "criticalCount": critical_count, "highCount": high_count}
             )
 
@@ -226,12 +550,13 @@ def transform(input):
 
         if capped:
             fail_reasons.append(capped)
+        if coverage_note:
+            pass_reasons.append(coverage_note)
 
         if medium_count > 0 or low_count > 0:
             pass_reasons.append(f"Additional findings: {medium_count} medium, {low_count} low, {info_count} info")
 
-        return create_response(
-            result={
+        result = {
                 "noCriticalFindings": no_critical,
                 "noHighFindings": no_high,
                 "criticalCount": critical_count,
@@ -241,7 +566,22 @@ def transform(input):
                 "infoCount": info_count,
                 "totalFindings": total_findings,
                 "domain": domain
-            },
+            }
+        if coverage_note:
+            result["domainsScanned"] = to_int(data.get("domainsScanned"))
+            result["totalDiscovered"] = to_int(data.get("totalDiscovered"))
+            result["unresponsiveHosts"] = excluded[:20]
+        # Per criterion: each key lists only the findings that make that key fail, and only when it fails.
+        by_key = {}
+        if critical_findings:
+            by_key["noCriticalFindings"] = evidence_items(critical_findings)
+        if high_findings:
+            by_key["noHighFindings"] = evidence_items(high_findings)
+        if by_key:
+            result["evidenceItemsByKey"] = by_key
+
+        return create_response(
+            result=result,
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
@@ -251,6 +591,9 @@ def transform(input):
                 "domain": domain,
                 "scanStatus": scan_status,
                 "totalFindings": total_findings,
+                "domainsScanned": to_int(data.get("domainsScanned")),
+                "totalDiscovered": to_int(data.get("totalDiscovered")),
+                "unresponsiveHosts": excluded[:20],
                 "findingsArrayLength": len(findings),
                 "criticalCount": critical_count,
                 "highCount": high_count,
@@ -261,9 +604,11 @@ def transform(input):
         )
 
     except Exception as e:
+        reason = f"Transformation error, so the findings are unknown: {str(e)}"
         return create_response(
-            result={"noCriticalFindings": False, "noHighFindings": False},
+            result={"noCriticalFindings": None, "noHighFindings": None},
             validation={"status": "error", "errors": [], "warnings": []},
+            api_errors=[reason],
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=[reason]
         )

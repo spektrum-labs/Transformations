@@ -37,6 +37,21 @@ def app(name, status="ENABLED", provider=SAML_P):
             "ApplicationProviderArn": provider, "Name": name, "InstanceArn": ARN, "Status": status}
 
 
+def not_evaluated(out, key):
+    """Nothing was measured: the criterion is None and the response says so (Token-Service grades a bare
+    None as Failed unless additionalInfo.dataCollection.status is "error")."""
+    assert out[key] is None
+    collection = out["additionalInfo"]["dataCollection"]
+    assert collection["status"] == "error"
+    assert collection["errors"] and all(isinstance(e, str) and e for e in collection["errors"])
+
+
+def measured(out, key, value):
+    """A real read that shows the answer: the value, and no not-evaluated marker."""
+    assert out[key] is value
+    assert "additionalInfo" not in out or out["additionalInfo"]["dataCollection"]["status"] != "error"
+
+
 def merged(*parts):
     out = {}
     for p in parts:
@@ -52,15 +67,17 @@ def test_sso_enabled():
     assert t(good)["isSSOEnabled"] is True
     assert t({"apiResponse": good})["isSSOEnabled"] is True
     assert t(json.dumps(good))["isSSOEnabled"] is True
-    assert t(merged(INSTANCES, {"Applications": [app("old", "DISABLED")]}))["isSSOEnabled"] is False
-    assert t(merged(INSTANCES, {"Applications": []}))["isSSOEnabled"] is False
+    # measured absence: both lists were read and the instance is not enabled for sign-in
+    measured(t(merged(INSTANCES, {"Applications": [app("old", "DISABLED")]})), "isSSOEnabled", False)
+    measured(t(merged(INSTANCES, {"Applications": []})), "isSSOEnabled", False)
     creating = merged({"Instances": [dict(INSTANCES["Instances"][0], Status="CREATE_IN_PROGRESS")]}, {"Applications": [app("jira")]})
-    assert t(creating)["isSSOEnabled"] is False
-    assert t(merged({"Instances": []}, {"Applications": [app("jira")]}))["isSSOEnabled"] is False
-    assert t(merged(good, {"NextToken": "abc"}))["isSSOEnabled"] is False
-    assert t(INSTANCES)["isSSOEnabled"] is False                      # applications never read
+    measured(t(creating), "isSSOEnabled", False)
+    measured(t(merged({"Instances": []}, {"Applications": [app("jira")]})), "isSSOEnabled", False)
+    # nothing measured: an unread page, a list that never arrived, an AWS or Integration-Service error
+    not_evaluated(t(merged(good, {"NextToken": "abc"})), "isSSOEnabled")
+    not_evaluated(t(INSTANCES), "isSSOEnabled")                       # applications never read
     for bad in EMPTYISH:
-        assert t(bad)["isSSOEnabled"] is False
+        not_evaluated(t(bad), "isSSOEnabled")
 
 
 # ---- authTypesAllowed -------------------------------------------------------------------
@@ -86,10 +103,14 @@ def test_trusted_token_issuers():
     tti = {"TrustedTokenIssuers": [{"TrustedTokenIssuerArn": "arn:aws:sso::123456789012:trustedTokenIssuer/ssoins-1/tti-1",
                                     "Name": "okta", "TrustedTokenIssuerType": "OIDC_JWT"}]}
     assert t(tti)["isTrustedApplicationProtectionEnabled"] is True
-    assert t({"TrustedTokenIssuers": []})["isTrustedApplicationProtectionEnabled"] is False
-    assert t({"TrustedTokenIssuers": [{"Name": "no arn"}]})["isTrustedApplicationProtectionEnabled"] is False
+    measured(t(tti), "isTrustedApplicationProtectionEnabled", True)
+    measured(t({"TrustedTokenIssuers": []}), "isTrustedApplicationProtectionEnabled", False)    # read, and none configured
+    assert t(merged(tti, {"NextToken": "more"}))["isTrustedApplicationProtectionEnabled"] is True  # one issuer is enough
+    not_evaluated(t({"TrustedTokenIssuers": [], "NextToken": "more"}), "isTrustedApplicationProtectionEnabled")
+    not_evaluated(t({"TrustedTokenIssuers": [{"Name": "no arn"}]}), "isTrustedApplicationProtectionEnabled")  # shape not recognised
+    not_evaluated(t({"TrustedTokenIssuers": "oops"}), "isTrustedApplicationProtectionEnabled")
     for bad in EMPTYISH:
-        assert t(bad)["isTrustedApplicationProtectionEnabled"] is False
+        not_evaluated(t(bad), "isTrustedApplicationProtectionEnabled")
 
 
 # ---- permission-set provisioning ---------------------------------------------------------
@@ -105,18 +126,21 @@ def provisioning(account_lists, sets=None):
 def test_rbac():
     t = load("isrbacimplemented")
     assert t(provisioning([["111111111111"], [], ["222222222222", "333333333333"]]))["isRBACImplemented"] is True
-    assert t(provisioning([[], [], []]))["isRBACImplemented"] is False
-    assert t(provisioning([], sets=[]))["isRBACImplemented"] is False
-    assert t(provisioning([["111111111111"], []]))["isRBACImplemented"] is False          # one body missing
+    # measured absence: every permission set's accounts were read and none is provisioned, or there are no sets
+    measured(t(provisioning([[], [], []])), "isRBACImplemented", False)
+    measured(t(provisioning([], sets=[])), "isRBACImplemented", False)
+    # nothing measured: a missing body, an AWS error on one set, an unread page, a fan-out that never ran
+    not_evaluated(t(provisioning([["111111111111"], []])), "isRBACImplemented")          # one body missing
     partial = provisioning([["111111111111"], [], []])
     partial["provisionedAccounts"][1] = AWS_DENIED
-    assert t(partial)["isRBACImplemented"] is False
+    not_evaluated(t(partial), "isRBACImplemented")
     paged = provisioning([["111111111111"], [], []])
     paged["provisionedAccounts"][0]["NextToken"] = "more"
-    assert t(paged)["isRBACImplemented"] is False
-    assert t({"PermissionSets": PS})["isRBACImplemented"] is False                       # fan-out never ran
+    not_evaluated(t(paged), "isRBACImplemented")
+    not_evaluated(t(merged(provisioning([["111111111111"], [], []]), {"NextToken": "more"})), "isRBACImplemented")
+    not_evaluated(t({"PermissionSets": PS}), "isRBACImplemented")                        # fan-out never ran
     for bad in EMPTYISH:
-        assert t(bad)["isRBACImplemented"] is False
+        not_evaluated(t(bad), "isRBACImplemented")
 
 
 def test_unprovisioned_count():
