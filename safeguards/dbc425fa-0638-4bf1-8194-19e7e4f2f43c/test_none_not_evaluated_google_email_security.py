@@ -592,28 +592,27 @@ SPECS = [
         "measured": [
             ("no_records_found", lambda: {"DMARC": False, "DKIM": False, "SPF": False},
              {"isDNSConfigured": False, "isDMARCConfigured": False, "isDKIMConfigured": False, "isSPFConfigured": False}),
-            ("one_record_missing", lambda: {"DMARC": True, "DKIM": True, "SPF": False},
+            ("one_record_missing", lambda: {"DMARC": "v=DMARC1; p=reject", "DKIM": True, "SPF": False},
              {"isDNSConfigured": False, "isDMARCConfigured": True, "isDKIMConfigured": True, "isSPFConfigured": False}),
-            ("all_records_found", lambda: {"DMARC": True, "DKIM": True, "SPF": True},
+            ("all_records_found", lambda: {"DMARC": "v=DMARC1; p=reject", "DKIM": True, "SPF": "v=spf1 -all"},
              {"isDNSConfigured": True, "isDMARCConfigured": True, "isDKIMConfigured": True, "isSPFConfigured": True}),
-            ("the_string_false_reads_as_not_found", lambda: {"DMARC": "False", "DKIM": "True", "SPF": "true"},
+            ("the_string_false_reads_as_not_found", lambda: {"DMARC": "False", "DKIM": "True", "SPF": "v=spf1 -all"},
              {"isDNSConfigured": False, "isDMARCConfigured": False, "isDKIMConfigured": True, "isSPFConfigured": True}),
             ("record_text_is_a_found_record", lambda: {"DMARC": "v=DMARC1; p=reject", "DKIM": True, "SPF": "v=spf1 -all"},
              {"isDNSConfigured": True, "isDMARCConfigured": True, "isDKIMConfigured": True, "isSPFConfigured": True}),
         ],
         # A key the lookup did not report is None, never False, and the keys it did report keep their own
-        # values. A reported record that is absent already proves isDNSConfigured False, and a missing key must
-        # not mask it: the dataCollection error is set only when isDNSConfigured itself is None.
+        # values. The status is per response, so any unreadable protocol also leaves isDNSConfigured None.
         "partial": [
-            ("dkim_key_missing", lambda: {"DMARC": True, "SPF": True},
+            ("dkim_key_missing", lambda: {"DMARC": "v=DMARC1; p=reject", "SPF": "v=spf1 -all"},
              {"isDNSConfigured": None, "isDMARCConfigured": True, "isDKIMConfigured": None, "isSPFConfigured": True}),
-            ("spf_off_and_dkim_key_missing", lambda: {"DMARC": True, "SPF": False},
-             {"isDNSConfigured": False, "isDMARCConfigured": True, "isDKIMConfigured": None, "isSPFConfigured": False}),
+            ("spf_off_and_dkim_key_missing", lambda: {"DMARC": "v=DMARC1; p=reject", "SPF": False},
+             {"isDNSConfigured": None, "isDMARCConfigured": True, "isDKIMConfigured": None, "isSPFConfigured": False}),
             ("dmarc_off_and_two_keys_missing", lambda: {"DMARC": False},
-             {"isDNSConfigured": False, "isDMARCConfigured": False, "isDKIMConfigured": None, "isSPFConfigured": None}),
-            ("only_dmarc_reported", lambda: {"DMARC": True},
+             {"isDNSConfigured": None, "isDMARCConfigured": False, "isDKIMConfigured": None, "isSPFConfigured": None}),
+            ("only_dmarc_reported", lambda: {"DMARC": "v=DMARC1; p=reject"},
              {"isDNSConfigured": None, "isDMARCConfigured": True, "isDKIMConfigured": None, "isSPFConfigured": None}),
-            ("a_key_present_as_null", lambda: {"DMARC": True, "DKIM": None, "SPF": True},
+            ("a_key_present_as_null", lambda: {"DMARC": "v=DMARC1; p=reject", "DKIM": None, "SPF": "v=spf1 -all"},
              {"isDNSConfigured": None, "isDMARCConfigured": True, "isDKIMConfigured": None, "isSPFConfigured": True}),
         ],
     },
