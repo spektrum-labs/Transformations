@@ -1,0 +1,40 @@
+{
+  "name": "antiPassbackExemptCardCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of enabled physical access credentials (cards) that are exempt from the anti-passback rule.",
+  "valueType": "integer",
+  "unit": "count",
+  "domain": {
+    "min": 0
+  },
+  "population": "the enabled card assignments of every person the connected access-control instance lists",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "A complete read of the people list in which at least one enabled card assignment is present and each carries the AntiPassbackExempt field; the count is then exact (0 when none are exempt). A tenant with no enabled card, an error or refused answer, a partial read, or any missing field is not measured (a count beside one is only a lower bound).",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/physical-security/acre-security-access-control/antiPassbackExemptCardCount.py (acre Access Control API, GET /api/f/{instanceKey}/people, CardAssignmentInfo.AntiPassbackExempt: https://apidocs.acresecurity.cloud/object-model/cardassignmentinfo/)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-18",
+      "change": "Registered so the acre transform can emit it."
+    }
+  ],
+  "notes": "Registered so the transform named in citations can emit it. Other vendors that use the same name were not reviewed, so the key stays proposed and V0."
+}

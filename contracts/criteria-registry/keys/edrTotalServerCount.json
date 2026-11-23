@@ -1,0 +1,45 @@
+{
+  "name": "edrTotalServerCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of servers in the endpoint inventory that requiredCoveragePercentage divides by, in an EDR coverage transform.",
+  "valueType": "integer",
+  "unit": "count",
+  "domain": {
+    "min": 0
+  },
+  "population": "servers. Class rule per vendor: CrowdStrike product_type_desc Server or Domain Controller (product_type 3 or 2 when the description is absent); SentinelOne machineType server; Defender osPlatform containing 'server' or any Linux distribution (ruling 2026-10-16). The denominator and the protected test are exactly the ones the same transform uses for requiredCoveragePercentage, so the split agrees with the blended figure.",
+  "polarity": "unknown",
+  "evidenceRequiredForTrue": "A complete read of the device inventory. Null when the read is partial or failed.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "undecided",
+  "allowedCategories": [
+    "Endpoint Security",
+    "MDR"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/epp/crowdstrike-falcon/requiredCoveragePercentage.py (transform and its test_*_server_workstation_coverage.py)",
+    "safeguards/epp/sentinelone/requiredCoveragePercentage.py (transform and its test_*_server_workstation_coverage.py)",
+    "safeguards/7BC425FA-0638-4BF1-8194-19E7E4F2F43C/requiredcoveragepercentage.py and microsoft_endpoint_oneclick.py (test_defender_server_workstation_coverage.py)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-16",
+      "change": "Registered with the EDR server / workstation coverage split added to four EDR coverage transforms under edr* names (additive; no requirement reads it yet)."
+    }
+  ],
+  "notes": "Supporting count for the server / workstation coverage split; not a criterion on its own today."
+}

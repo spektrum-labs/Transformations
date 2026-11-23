@@ -1,63 +1,57 @@
-"""Transformation: isURLRewriteEnabled — Mimecast TTP URL Protect
-Evaluates whether URL rewriting is enabled by inspecting the managed URL
-rules returned by getTTPUrlManagedUrls. A non-zero meta.pagination.totalCount
-confirms TTP URL Protect is active and rewriting URLs in delivered emails.
+"""Transformation: isURLRewriteEnabled - Mimecast, method getAccount.
+
+POST /api/account/get-account lists the account's licensed product packages. True when the package that
+provides URL Protection (click-time URL rewriting) is licensed, matched by its bracketed product id ([1043]),
+so a package rename does not break the check. False when getAccount returns the account and its package
+list without one. None (not measured, shown "Not evaluated") when the body is an error, a fail entry, an
+auth envelope, unrelated JSON, or an account with no package list.
+
+This proves the package is licensed on the account, not how its policies are tuned. It needs only the
+Account Management product and the Account | Dashboard | Read permission, the same grant the connection
+test uses. It replaces the managed-URL list (getTTPUrlManagedUrls): that list is an allow/block list, an
+empty list does not mean rewriting is off, and the endpoint needs more than the setup tells the customer
+to grant.
+
+Transitional branch: until the stored definition points this key at getAccount, the pipeline still hands
+this transform the managed-URL list. That shape is graded as before so nothing changes in the gap; it is
+dead code once the definition edit is applied and is removed in the following release.
 """
 import json
 from datetime import datetime
 
 
-def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
-    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-        return input_data["data"], input_data["validation"]
-    data = input_data
-    if isinstance(data, dict):
-        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
-            unwrapped = False
-            for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
-                    data = data[key]
-                    unwrapped = True
-                    break
-            if not unwrapped:
-                break
-    validation = {
-        "status": "unknown",
-        "errors": [],
-        "warnings": ["Legacy input format - no schema validation performed"],
-    }
-    return data, validation
+KEY = "isURLRewriteEnabled"
+PACKAGES = {"[1043]": "URL Protection (Site)"}
+
+
+def extract_validation(input_data):
+    if isinstance(input_data, dict) and "validation" in input_data and isinstance(input_data["validation"], dict):
+        return input_data["validation"]
+    return {"status": "unknown", "errors": [], "warnings": ["Legacy input format - no schema validation performed"]}
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
+    """Standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
     transform_err_list = transformation_errors or []
-    data_collection_status = "error" if api_err_list else "success"
-    transformation_status = "error" if transform_err_list else "success"
-    response_metadata = {
-        "evaluatedAt": datetime.utcnow().isoformat() + "Z",
-        "schemaVersion": "2.0",
-    }
+    response_metadata = {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "2.0"}
     if metadata:
         response_metadata.update(metadata)
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": data_collection_status, "errors": api_err_list},
+            "dataCollection": {"status": "error" if api_err_list else "success", "errors": api_err_list},
             "validation": {
                 "status": validation.get("status", "unknown"),
                 "errors": validation.get("errors", []),
                 "warnings": validation.get("warnings", []),
             },
             "transformation": {
-                "status": transformation_status,
+                "status": "error" if transform_err_list else "success",
                 "errors": transform_err_list,
                 "inputSummary": input_summary or {},
             },
@@ -72,99 +66,151 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def transform(input):
-    data, validation = extract_input(input)
+def raw_body(input):
+    # input.get("data") makes Token-Service pass the undrilled getAccount body in a {data, validation}
+    # envelope, so meta and fail stay visible.
+    if isinstance(input, dict) and "validation" in input:
+        return input.get("data")
+    return input
 
-    # Token-Service navigates into the response's "data" key, so this transform
-    # usually receives the bare list of managed URLs (meta/pagination stripped).
-    # Re-wrap so the access below works in the live pipeline and local testing.
-    if isinstance(data, list):
-        data = {"data": data}
-    if not isinstance(data, dict):
-        data = {}
 
-    # Extract top-level sections
-    fail_list = data.get("fail") or []
-    meta = data.get("meta") or {}
-    pagination = meta.get("pagination") or {}
-    url_items = data.get("data") or []
+def is_account(item):
+    return isinstance(item, dict) and isinstance(item.get("packages"), list)
 
-    page_size = len(url_items)
-    # meta.pagination is stripped by the pipeline's response navigation, so fall
-    # back to the number of managed URLs visible in the delivered page.
-    total_count = pagination.get("totalCount") or page_size
 
-    # Collect API-level error messages from the fail array
-    api_errors = []
-    for f in fail_list:
-        if isinstance(f, dict):
-            api_errors.append(f.get("message") or str(f))
-        else:
-            api_errors.append(str(f))
+def find_account(obj):
+    """(account, error) for the first account in a Mimecast getAccount body.
 
-    # Count rewrite states across the sampled page
-    rewrite_enabled_count = 0
-    rewrite_disabled_count = 0
-    for item in url_items:
-        if isinstance(item, dict):
-            if item.get("disableRewrite") is False:
-                rewrite_enabled_count = rewrite_enabled_count + 1
-            elif item.get("disableRewrite") is True:
-                rewrite_disabled_count = rewrite_disabled_count + 1
+    Accepts the full body {meta, fail, data: [account]}, the bare account list Token-Service hands over
+    after drilling into "data", a lone account, and the usual wrapper keys.
+    """
+    cur = obj
+    for depth in range(6):
+        if isinstance(cur, str):
+            try:
+                cur = json.loads(cur)
+            except Exception:
+                return None, None
+        if isinstance(cur, list):
+            if cur and is_account(cur[0]):
+                return cur[0], None
+            return None, None
+        if not isinstance(cur, dict):
+            return None, None
+        if is_account(cur):
+            return cur, None
+        fail = cur.get("fail")
+        if isinstance(fail, list) and fail:
+            return None, json.dumps(fail)[:300]
+        if cur.get("error") is True or cur.get("errors"):
+            return None, json.dumps(cur.get("errors") or cur.get("message") or "error")[:300]
+        meta = cur.get("meta")
+        status = meta.get("status") if isinstance(meta, dict) else None
+        if isinstance(status, int) and not isinstance(status, bool) and status != 200:
+            return None, "meta.status " + str(status)
+        accounts = cur.get("data")
+        if isinstance(accounts, list):
+            if accounts and is_account(accounts[0]):
+                return accounts[0], None
+            return None, None
+        nxt = None
+        for key in ["apiResponse", "result", "response", "api_response", "Output", "data"]:
+            if isinstance(cur.get(key), (dict, str, list)):
+                nxt = cur.get(key)
+                break
+        if nxt is None:
+            return None, None
+        cur = nxt
+    return None, None
 
-    # Primary verdict: a non-zero totalCount confirms TTP URL Protect is active
-    # and managing URLs through rewriting. An empty list means the feature has
-    # no rules and is effectively not operational.
-    # When the pipeline strips meta.pagination, fall back to the page itself:
-    # any managed URL entries present confirm TTP URL Protect is operational.
-    is_url_rewrite_enabled = total_count > 0 or page_size > 0
 
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
+def managed_url_entries(obj):
+    """The managed-URL entries when the body is a getTTPUrlManagedUrls response, else None."""
+    cur = obj
+    for depth in range(6):
+        if isinstance(cur, str):
+            try:
+                cur = json.loads(cur)
+            except Exception:
+                return None
+        if isinstance(cur, list):
+            if cur and all(isinstance(x, dict) and "disableRewrite" in x for x in cur):
+                return cur
+            return None
+        if not isinstance(cur, dict):
+            return None
+        meta = cur.get("meta")
+        pagination = meta.get("pagination") if isinstance(meta, dict) else None
+        data = cur.get("data")
+        if isinstance(data, list) and (not data or all(isinstance(x, dict) and "disableRewrite" in x for x in data)):
+            if data or isinstance(pagination, dict):
+                return data
+            return None
+        nxt = None
+        for key in ["apiResponse", "result", "response", "api_response", "Output", "data"]:
+            if isinstance(cur.get(key), (dict, str, list)):
+                nxt = cur.get(key)
+                break
+        if nxt is None:
+            return None
+        cur = nxt
+    return None
 
-    if is_url_rewrite_enabled:
-        pass_reasons.append(
-            f"TTP URL Protect is active with {total_count} managed URLs configured "
-            f"(meta.pagination.totalCount={total_count}). In the sampled page of "
-            f"{page_size} entries, {rewrite_enabled_count} have URL rewriting enabled "
-            f"(disableRewrite=false) and {rewrite_disabled_count} have rewriting "
-            f"explicitly suppressed (disableRewrite=true) for trusted/permitted domains."
-        )
-    else:
-        fail_reasons.append(
-            "No managed URLs found in TTP URL Protect (meta.pagination.totalCount=0). "
-            "URL rewriting does not appear to be configured or active for this account."
-        )
-        recommendations.append(
-            "Configure TTP URL Protect managed URL rules in the Mimecast administration "
-            "console under Administration > Gateway > Policies > URL Protection. "
-            "Enabling URL rewriting ensures all links in delivered emails are scanned "
-            "and rewritten through Mimecast's proxy before users can click them."
-        )
 
+def not_measured(problem, validation):
     return create_response(
-        result={
-            "isURLRewriteEnabled": is_url_rewrite_enabled,
-            "totalManagedUrls": total_count,
-            "sampledUrlsWithRewriteEnabled": rewrite_enabled_count,
-            "sampledUrlsWithRewriteDisabled": rewrite_disabled_count,
-        },
+        result={KEY: None},
         validation=validation,
-        pass_reasons=pass_reasons,
-        fail_reasons=fail_reasons,
-        recommendations=recommendations,
-        input_summary={
-            "totalManagedUrls": total_count,
-            "pageSize": page_size,
-            "sampledRewriteEnabled": rewrite_enabled_count,
-            "sampledRewriteDisabled": rewrite_disabled_count,
-            "apiFailures": len(fail_list),
-        },
-        api_errors=api_errors,
-        metadata={
-            "transformationId": "isURLRewriteEnabled",
-            "vendor": "Mimecast",
-            "category": "emailsecurity",
-        },
+        fail_reasons=[problem],
+        api_errors=[problem],
+        metadata={"transformationId": KEY, "vendor": "Mimecast", "category": "Email Security"},
+    )
+
+
+def legacy_managed_urls(entries, validation):
+    """Transitional: the old verdict on the managed-URL list. Removed once the definition reads getAccount."""
+    page_size = len(entries)
+    enabled = page_size > 0
+    text = ("The Mimecast managed-URL list has %d entries." % page_size) if enabled else \
+        "The Mimecast managed-URL list is empty."
+    return create_response(
+        result={KEY: enabled, "totalManagedUrls": page_size},
+        validation=validation,
+        pass_reasons=[text] if enabled else [],
+        fail_reasons=[] if enabled else [text],
+        input_summary={"pageSize": page_size, "legacyManagedUrlShape": True},
+        metadata={"transformationId": KEY, "vendor": "Mimecast", "category": "Email Security"},
+    )
+
+
+def transform(input):
+    validation = extract_validation(input)
+    body = raw_body(input)
+    account, error = find_account(body)
+    if error is not None:
+        return not_measured("Mimecast getAccount returned an error: " + error, validation)
+    if account is None:
+        entries = managed_url_entries(body)
+        if entries is not None:
+            return legacy_managed_urls(entries, validation)
+        return not_measured("No Mimecast account with a package list in the response; nothing to evaluate.", validation)
+    packages = [str(p) for p in account.get("packages")]
+    found = []
+    for pkg in packages:
+        for token in PACKAGES:
+            if token in pkg and PACKAGES[token] not in found:
+                found.append(PACKAGES[token])
+    enabled = len(found) > 0
+    if enabled:
+        text = "Licensed: " + ", ".join(found) + " (" + str(len(packages)) + " packages on the account)."
+    else:
+        text = "None of " + ", ".join(PACKAGES[t] for t in PACKAGES) + " is among the account's " + str(len(packages)) + " licensed packages."
+    return create_response(
+        result={KEY: enabled, "matchedPackages": found, "licensedPackageCount": len(packages)},
+        validation=validation,
+        pass_reasons=[text] if enabled else [],
+        fail_reasons=[] if enabled else [text],
+        recommendations=[] if enabled else ["License and enable URL Protection (click-time URL rewriting) in Mimecast."],
+        input_summary={"licensedPackageCount": len(packages), "matched": len(found)},
+        metadata={"transformationId": KEY, "vendor": "Mimecast", "category": "Email Security"},
     )

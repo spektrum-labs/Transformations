@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 class ExternalassetinventorycountInput(BaseModel):
     """Expected input schema for the externalassetinventorycount transformation. Criteria key: externalAssetInventoryCount"""
-    count: Optional[int] = Field(None, description="Number of externally-exposed assets")
+    HOST_LIST_OUTPUT: Optional[Dict] = Field(None, description="Qualys host list output (RESPONSE.HOST_LIST.HOST)")
 
     class Config:
         extra = "allow"

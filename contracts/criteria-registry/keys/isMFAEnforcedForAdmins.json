@@ -1,0 +1,37 @@
+{
+  "name": "isMFAEnforcedForAdmins",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when every administrator account in scope signs in with a second factor or an identity provider (a complete read of the administrators, none exempt).",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the active administrator accounts of the connected tenant or team",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete read of the active administrator accounts showing each one authenticates with a second factor or SSO. No administrator in the read, an error or refused answer, or a partial read is not measured.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/iam/dashlane/ismfaenforcedforadmins.py (Dashlane Public API, POST /public/teams/Members: role.teamAdmin or role.billingAdmin with authentication.type sso, totp_device_registration or totp_login)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-18",
+      "change": "Registered so the Dashlane transform can emit it."
+    }
+  ],
+  "notes": "Registered so the transform named in citations can emit it. Other vendors that use the same name were not reviewed, so the key stays proposed and V0."
+}

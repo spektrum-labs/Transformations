@@ -93,7 +93,7 @@ def test_every_file_emits_all_numbers_own_key_first():
         assert (out["overdueCriticalCount"], out["overdueHighCount"]) == (1, 2)
 
 
-# ---------------------------------------------------------------- flipped: the same estate, passing
+# ---------------------------------------------------------------- flipped: the same environment, passing
 
 def test_flipped_overdue_zero_makes_patch_management_valid():
     body = composite(5, 7, 0, 0)

@@ -163,7 +163,10 @@ def test_good_and_flip(name, key, good, bad):
         assert module.transform(form)["transformedResponse"][key] is True
     for form in (bad, enriched(bad)):
         out = module.transform(form)
-        assert out["transformedResponse"][key] is False
+        # An empty audit log proves nothing (main's ruling): not evaluated, never a measured False.
+        assert out["transformedResponse"][key] is (None if key == "isActivityAuditTrailEnabled" else False)
+        if key == "isActivityAuditTrailEnabled":
+            continue
         assert out["additionalInfo"]["dataCollection"]["status"] == "success"
 
 

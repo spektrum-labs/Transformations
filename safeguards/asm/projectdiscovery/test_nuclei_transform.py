@@ -82,16 +82,16 @@ class NucleiTransformTest(unittest.TestCase):
     def full(self, payload):
         return load_transformation().transform(payload)
 
-    def test_carlex_capped_clean_scan_is_unevaluated(self):
-        # Carlex 2 Oct 01:04 ET: 25 of 45 discovered hosts scanned, 0 findings. Was a pass.
-        out = self.full(scan(primaryDomain="carlex.com", domainsScanned="25", totalDiscovered="45", domainsCapped="True",
+    def test_capped_clean_scan_is_unevaluated(self):
+        # A live scan, 2 Oct 01:04 ET: 25 of 45 discovered hosts scanned, 0 findings. Was a pass.
+        out = self.full(scan(primaryDomain="example.com", domainsScanned="25", totalDiscovered="45", domainsCapped="True",
                              templatesScanned="1675", domainResults=[]))
         tr, info = out["transformedResponse"], out["additionalInfo"]
         self.assertIsNone(tr["noCriticalFindings"])
         self.assertIsNone(tr["noHighFindings"])
         self.assertEqual(info["dataCollection"]["status"], "error")
-        self.assertIn("Only 25 of 45 discovered host(s) of carlex.com were scanned", info["dataCollection"]["errors"][0])
-        self.assertIn("not a clean estate", info["dataCollection"]["errors"][0])
+        self.assertIn("Only 25 of 45 discovered host(s) of example.com were scanned", info["dataCollection"]["errors"][0])
+        self.assertIn("not proof of no findings in scope", info["dataCollection"]["errors"][0])
         self.assertEqual(info["transformation"]["inputSummary"]["totalDiscovered"], 45)
 
     def test_numeric_cap_without_flag_is_unevaluated(self):
@@ -99,9 +99,9 @@ class NucleiTransformTest(unittest.TestCase):
         self.assertIsNone(out["transformedResponse"]["noCriticalFindings"])
         self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
 
-    def test_see_to_solve_full_clean_scan_still_passes(self):
-        # See to Solve 2 Oct 01:04 ET: 20 of 20 hosts, 0 findings: a real pass.
-        out = self.full(scan(primaryDomain="seetosolve.com", domainsScanned="20", totalDiscovered="20", domainsCapped="False",
+    def test_full_clean_scan_still_passes(self):
+        # A live scan, 2 Oct 01:04 ET: 20 of 20 hosts, 0 findings: a real pass.
+        out = self.full(scan(primaryDomain="example.net", domainsScanned="20", totalDiscovered="20", domainsCapped="False",
                              domainResults=[]))
         tr, info = out["transformedResponse"], out["additionalInfo"]
         self.assertTrue(tr["noCriticalFindings"])

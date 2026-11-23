@@ -4,6 +4,11 @@ Vendor: Anthropic  |  Category: Artificial Intelligence
 Product: Claude
 Evaluates: Ensures access groups are provisioned from the identity provider through SCIM rather than maintained by hand inside Claude.
 API Source: listComplianceGroups
+Not evaluated, never False on a read that proves nothing: a refused call (401/403/404/429),
+an empty or unrecognised body, a page that says more groups exist while every group seen is
+SCIM, a group whose source_type is missing or unknown, and an exception inside this file all
+answer None with dataCollection.status "error", which Token-Service records as not evaluated.
+False only when a readable group carries source_type "direct".
 """
 import json
 from datetime import datetime
@@ -43,26 +48,10 @@ def extract_input(input_data):
     return data, validation
 
 
-#: The criterion key Token-Service extracts from this file's transformedResponse. Every
-#: result dict below is built with this same name, so the name that carries the answer and
-#: the name create_response reads to decide whether there WAS an answer cannot drift apart.
-#: That is the whole difference from a separate list of key names, which can be -- and has
-#: been -- left behind when a file gains a key.
-CRITERION = "isGroupProvisioningManaged"
-
-
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
     """Create the standardized 5-section transformation response."""
-    # Value-keyed, never name-keyed. A criterion reported as None was not measured, and
-    # Token-Service grades an unmeasured criterion as FAILED unless dataCollection.status is
-    # "error" -- which only a non-empty api_errors produces. Deriving that from the criterion's
-    # own value covers the branches nobody thought about, transform()'s except included,
-    # because the branch never has to remember to say so.
-    if not api_errors and isinstance(result, dict) and result.get(CRITERION) is None:
-        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
-                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -100,6 +89,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+CRITERION = "isGroupProvisioningManaged"
 METADATA = {
     "transformationId": "isGroupProvisioningManaged",
     "vendor": "Anthropic",
@@ -137,51 +127,22 @@ REFUSAL_REASONS = {
 }
 
 
-# Anthropic's documented error body carries no HTTP status of its own: it is
-# {"error": {"type": ..., "message": ...}} and the status is on the response. The vendor's
-# guidance is "Match on the HTTP status code and error.type, not on the message string"
-# (compliance-errors.md), so the type is mapped back to the status REFUSAL_REASONS is keyed
-# on. Without this the tailored 403 paragraph -- the one that tells an administrator to swap
-# their key class -- never fires on the shape Anthropic actually sends.
-ERROR_TYPE_STATUS = {
-    "authentication_error": 401,
-    "permission_error": 403,
-    "not_found_error": 404,
-    "rate_limit_error": 429,
-}
-
-
 def detect_refusal(data):
-    """Return (status, why, fix) when the payload is an error envelope, else None.
-
-    Three shapes reach a transform: Anthropic's own ({"error": {"type", "message"}}), the
-    generic one (error / errorType / status == "Error" alongside statusCode), and
-    Integration-Service's vendor relay ({"errorMessage", "vendorStatus": 403, ...}), which is
-    what /integration/run returns when the vendor refuses.
-    """
+    """Return (status, why, fix) when the payload is an error envelope, else None."""
     if not isinstance(data, dict):
         return None
-    err = data.get("error")
-    relay_status = data.get("vendorStatus")
-    is_relay = "errorMessage" in data or relay_status is not None
-    is_generic = bool(err or data.get("errorType") or data.get("status") == "Error")
-    if not (is_relay or is_generic):
+    if not (data.get("error") or data.get("errorType") or data.get("status") == "Error"):
         return None
-    status = relay_status if relay_status is not None else (data.get("statusCode") or data.get("status_code"))
+    status = data.get("statusCode") or data.get("status_code")
     try:
         status = int(status)
     except (TypeError, ValueError):
         status = None
-    if status is None and isinstance(err, dict):
-        status = ERROR_TYPE_STATUS.get(err.get("type"))
     why, fix = REFUSAL_REASONS.get(status, (
         "the vendor call did not succeed",
         "Inspect the integration method response for the underlying error."))
-    detail = data.get("errorMessage") or data.get("message") or ""
-    if not detail and isinstance(err, dict):
-        detail = err.get("message") or ""
-    if detail:
-        why = why + " (" + str(detail) + ")"
+    # The vendor's own message is not copied into the reason: it is free text from the
+    # vendor and can echo request details. The HTTP status carries the diagnosis.
     return status, why, fix
 
 
@@ -218,6 +179,49 @@ def settings_map(data):
     return out
 
 
+def not_measured(validation, reason, recommendation, extra=None, input_summary=None,
+                 transformation_errors=None):
+    """No verdict: the key is None and dataCollection.status is "error", so the evaluator
+    shows Not evaluated instead of a failed check. extra carries facts really read."""
+    result = {"isGroupProvisioningManaged": None}
+    if extra:
+        result.update(extra)
+    return create_response(
+        result=result,
+        validation=validation,
+        fail_reasons=[reason],
+        recommendations=[recommendation] if recommendation else [],
+        input_summary=input_summary or {},
+        metadata=METADATA,
+        api_errors=[reason],
+        transformation_errors=transformation_errors,
+    )
+
+
+def group_list(data):
+    """(groups, truncated) from a bare list or a {data|groups: [...], has_more, next_page} page.
+
+    groups is None when no list is recognised. truncated is True when the page says more
+    groups exist (has_more true or a next_page token), so an all-SCIM page cannot prove all.
+    """
+    items = None
+    truncated = False
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        items = data.get("data")
+        if not isinstance(items, list):
+            items = data.get("groups")
+        truncated = data.get("has_more") is True or bool(data.get("next_page"))
+    if not isinstance(items, list):
+        return None, False
+    return [g for g in items if isinstance(g, dict)], truncated
+
+
+def group_label(g):
+    return str(g.get("name") or g.get("id") or "unnamed")
+
+
 def evaluate(input):
     data, validation = extract_input(input)
     # Token-Service navigates into the response's "data" key (codeexecutor
@@ -227,72 +231,65 @@ def evaluate(input):
     refusal = detect_refusal(data)
     if refusal:
         refusal_status, refusal_why, refusal_fix = refusal
-        return create_response(
-            result={"isGroupProvisioningManaged": None, "endpointReachable": False, "httpStatus": refusal_status},
-            validation=validation,
-            fail_reasons=[
-                "The vendor call did not return data because " + refusal_why +
-                ". This is a connectivity or credential-scope result, not a finding about "
-                "the organization's configuration - the control's real state is unknown."
-            ],
-            recommendations=[refusal_fix],
+        return not_measured(
+            validation,
+            "The vendor call did not return data because " + refusal_why +
+            ". This is a connectivity or credential-scope result, not a finding about "
+            "the organization's configuration - the control's real state is unknown.",
+            refusal_fix,
+            extra={"endpointReachable": False, "httpStatus": refusal_status},
             input_summary={"endpointReachable": False, "httpStatus": refusal_status},
-            metadata=METADATA,
         )
 
-    if isinstance(data, list):
-        items = data
-    elif isinstance(data, dict):
-        items = data.get("data")
-        if not isinstance(items, list):
-            items = data.get("groups")
-    else:
-        items = None
-    if not isinstance(items, list):
-        items = []
-
-    groups = [g for g in items if isinstance(g, dict)]
+    groups, truncated = group_list(data)
+    if groups is None:
+        return not_measured(
+            validation,
+            "The GET /v1/compliance/groups response was not recognised - no groups list in the "
+            "payload - so identity-provider group provisioning was not evaluated.",
+            "Inspect the raw integration response.",
+        )
 
     if not groups:
-        return create_response(
-            result={"isGroupProvisioningManaged": None, "groupCount": 0,
-                    "scimGroupCount": 0, "directGroups": []},
-            validation=validation,
-            fail_reasons=[
-                "GET /v1/compliance/groups returned no groups, so identity-provider group "
-                "provisioning could not be assessed. An organization with no groups has no "
-                "group-based access model to evidence."
-            ],
-            recommendations=[
-                "Confirm the key carries read:compliance_org_data or read:org_audit, and that the "
-                "organization uses groups for access control."
-            ],
+        # An empty list proves nothing about how groups would be provisioned: a key without
+        # the right scope, an organization not using groups yet and an empty page all look
+        # the same. No verdict.
+        return not_measured(
+            validation,
+            "GET /v1/compliance/groups returned no groups, so identity-provider group "
+            "provisioning could not be assessed.",
+            "Confirm the key carries read:compliance_org_data, and that the organization uses "
+            "groups for access control.",
+            extra={"groupCount": 0, "scimGroupCount": 0, "directGroups": []},
             input_summary={"groupCount": 0},
-            metadata=METADATA,
         )
 
-    # source_type is the only field this check reads. A group object that omits it is not a
-    # hand-maintained group; it is a group whose provenance was not reported.
-    reporting = [g for g in groups if g.get("source_type") is not None]
-    if not reporting:
-        return create_response(
-            result={"isGroupProvisioningManaged": None, "groupCount": len(groups),
-                    "scimGroupCount": 0, "directGroups": []},
-            validation=validation,
-            fail_reasons=[
-                "None of the " + str(len(groups)) + " group(s) returned reported a source_type, "
-                "so whether their membership is provisioned from the identity provider was not "
-                "measured. An absent source_type is not a hand-maintained group."
-            ],
-            recommendations=["Inspect the raw listComplianceGroups response for the source_type field."],
-            input_summary={"groupCount": len(groups), "groupsReportingSource": 0},
-            metadata=METADATA,
+    # Anthropic documents two source_type values, "scim" and "direct". Anything else is
+    # unreadable, not direct: it cannot make the answer False on its own.
+    scim = [group_label(g) for g in groups if str(g.get("source_type", "")).lower() == "scim"]
+    direct = [group_label(g) for g in groups if str(g.get("source_type", "")).lower() == "direct"]
+    unknown = [group_label(g) for g in groups
+               if str(g.get("source_type", "")).lower() not in ("scim", "direct")]
+
+    if not direct and (unknown or truncated):
+        if unknown:
+            why = (str(len(unknown)) + " of " + str(len(groups)) + " group(s) carry no recognised "
+                   "source_type, so whether they are provisioned through SCIM was not read.")
+        else:
+            why = ("The groups response says more groups exist beyond this page, and every group "
+                   "on it is SCIM-provisioned; the unread groups could be maintained by hand.")
+        return not_measured(
+            validation,
+            why + " Identity-provider group provisioning was not evaluated.",
+            "Re-run the evaluation so every page of GET /v1/compliance/groups is read.",
+            # A page count is not the population when more pages exist, so counts are only
+            # reported as results when the list is complete.
+            extra=({"directGroups": []} if truncated else
+                   {"groupCount": len(groups), "scimGroupCount": len(scim), "directGroups": []}),
+            input_summary={"groupCount": len(groups), "scimGroupCount": len(scim),
+                           "unreadGroupCount": len(unknown), "truncated": truncated},
         )
 
-    scim = [str(g.get("name") or g.get("id") or "unnamed") for g in groups
-            if str(g.get("source_type", "")).lower() == "scim"]
-    direct = [str(g.get("name") or g.get("id") or "unnamed") for g in groups
-              if str(g.get("source_type", "")).lower() != "scim"]
     result = not direct
 
     if result:
@@ -335,11 +332,10 @@ def transform(input):
     try:
         return evaluate(input)
     except Exception as exc:  # never raise into the pipeline
-        return create_response(
-            result={"isGroupProvisioningManaged": None},
-            validation={"status": "error", "errors": [], "warnings": []},
+        return not_measured(
+            {"status": "error", "errors": [], "warnings": []},
+            "The groups response could not be read, so the "
+            "control's state is unknown.",
+            "Report this to the Spektrum integrations team with the raw API response.",
             transformation_errors=[str(exc)],
-            fail_reasons=["Transformation raised an unexpected error: " + str(exc)],
-            recommendations=["Report this to the Spektrum integrations team with the raw API response."],
-            metadata=METADATA,
         )

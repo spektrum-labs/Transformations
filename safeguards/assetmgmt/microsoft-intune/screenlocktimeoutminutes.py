@@ -14,18 +14,18 @@ Settings read (minutes):
     #microsoft.graph.windows10EndpointProtectionConfiguration localSecurityOptionsMachineInactivityLimit,
                                                             localSecurityOptionsMachineInactivityLimitInMinutes
                                                             ("Interactive logon: machine inactivity limit")
-A profile is ESTATE-WIDE when it is assigned to All devices or All users, has no exclusion-group assignment and no
+A profile is TENANT-WIDE when it is assigned to All devices or All users, has no exclusion-group assignment and no
 assignment filter. A null or 0 value is "not configured" and is ignored; any other value that does not read as minutes is
 Not evaluated (a fraction rounds up). A device restriction limit counts only when a password is required
 (passwordRequired), because DeviceLock applies it only then: either the same profile requires one, or a profile
-assigned to all devices or all users does (Intune merges DeviceLock settings per setting across profiles). Once at least one estate-wide profile sets a
-limit, the value is the longest limit set by ANY profile, estate-wide or narrower (a device in a narrower profile's
+assigned to all devices or all users does (Intune merges DeviceLock settings per setting across profiles). Once at least one tenant-wide profile sets a
+limit, the value is the longest limit set by ANY profile, tenant-wide or narrower (a device in a narrower profile's
 group receives both, and Intune flags the conflict), so a group profile at 60 minutes fails. A profile that reaches no
 device (no assignment, or exclusion groups only) is named in the summary and never sets the value.
 Scope, stated in every reason: Intune device configuration profiles. Settings catalog policies, security baselines
 and Group Policy are not read; a limit set only there reads Not evaluated, never failed.
 Not evaluated (None with a dataCollection error): an empty, error, truncated or unrecognised body; a profile with no
-readable assignments; or no estate-wide profile that sets an inactivity limit.
+readable assignments; or no tenant-wide profile that sets an inactivity limit.
 """
 import json
 from datetime import datetime, timezone
@@ -353,12 +353,12 @@ def transform(input):
                                 "Assign a device restriction (Password > Maximum minutes of inactivity until screen "
                                 "locks) or endpoint protection (Interactive logon: machine inactivity limit) profile "
                                 "of 15 minutes or less to All devices, or provide the evidence as a document.", summary)
-        # Once an estate-wide limit exists, every profile that sets one counts: a device in a narrower profile's
+        # Once an tenant-wide limit exists, every profile that sets one counts: a device in a narrower profile's
         # group receives both, so the longest limit set anywhere is the one some devices may get.
         every = [(v, n) for v, n in limits] + [(v, n + " [" + w + "]") for v, n, w in narrowed if w != NOT_ASSIGNED]
         worst = max([v for v, n in every])
         names = [n + " (" + str(v) + " min)" for v, n in sorted(every, reverse=True)]
-        line = ("The longest inactivity limit set by an Intune profile is " + str(worst) + " minutes (estate-wide "
+        line = ("The longest inactivity limit set by an Intune profile is " + str(worst) + " minutes (tenant-wide "
                 "baseline from a profile assigned to all devices or all users): " + name_list(names))
         if worst > 15:
             return create_response(

@@ -1,14 +1,23 @@
 """
 Transformation: messageMoveAuditTrailEnabled
 Vendor: Check Point Harmony Email & Collaboration (Infinity Portal API)
-Method: queryOffice365Events (POST /app/hec-api/v1.0/event/query, requestData.saas = [office365_emails], startDate = 30 days ago; all event types)
+Method: queryOffice365MoveEvents (POST /app/hec-api/v1.0/event/query, requestData.saas = [office365_emails,
+google_mail], eventTypes = the threat types, startDate/endDate = exactly the last 30 days, every page via
+responseEnvelope.scrollId). It also reads the older queryOffice365Events answer (all event types, one page).
 
-True when at least one message-move action (quarantine, restore, delete, move) appears in the event
-log for the last 30 days and EVERY such action on the page carries actionType, createTime and
-relatedEntityId, i.e. an auditable who-what-when trail. No move action observed, or any move action
-missing a field, reads false. Judges the first page of the event query (the oldest events of the
-window); the response carries no audit-log endpoint beyond this.
-Fails closed: an empty, error or unrecognised body proves nothing.
+The claim is that the vendor keeps a who-what-when trail of message moves. True when at least one message-move
+action read (quarantine, restore, delete, move) carries actionType, createTime and relatedEntityId, on any page,
+partial or not: records not read cannot undo that. Move actions read without those fields are counted in
+inputSummary.moveActionsMissingAuditFields and reported in additionalFindings; they do not turn a trail that is
+evidenced into False. False (no audited move) needs every record: it reads False only from a complete
+read, and is Not evaluated (None, with a coded data-collection error) when the read is partial or holds an
+entry that cannot be read. The vendor stops recordsNumber at 10000, so a total at that cap means the window holds
+more events than can ever be read; that case carries errorCode vendor_count_capped, any other partial read
+partial_read.
+Not evaluated (None, with a data-collection error) when the body is an error, empty or unrecognised:
+it proves nothing, so it is never reported as False.
+An entry that cannot be read (not an object, or an actions field that does not parse) is never skipped: it is
+counted, and it blocks the absence verdict the same way an unread page does.
 """
 
 import json
@@ -20,55 +29,172 @@ def transform(input):
     criteriaKey = "messageMoveAuditTrailEnabled"
 
     def create_response(value, pass_reasons=None, fail_reasons=None, input_summary=None,
-                        api_errors=None, transformation_errors=None):
+                        api_errors=None, transformation_errors=None, error_code=None, findings=None):
+        collection = {"status": "error" if api_errors else "success", "errors": api_errors or []}
+        if error_code and api_errors:
+            collection["errorCode"] = error_code  # machine-readable beside the prose; read by the posture stream
         return {
             "transformedResponse": {criteriaKey: value},
             "additionalInfo": {
-                "dataCollection": {"status": "error" if api_errors else "success",
-                                   "errors": api_errors or []},
+                "dataCollection": collection,
                 "validation": {"status": "unknown", "errors": [], "warnings": []},
                 "transformation": {"status": "error" if transformation_errors else "success",
                                    "errors": transformation_errors or [],
                                    "inputSummary": input_summary or {}},
                 "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [],
-                               "recommendations": [], "additionalFindings": []},
+                               "recommendations": [], "additionalFindings": findings or []},
                 "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z",
                              "schemaVersion": "1.0", "transformationId": criteriaKey,
                              "vendor": "Check Point Harmony Email & Collaboration",
-                             "method": "queryOffice365Events"},
+                             "method": "queryOffice365MoveEvents"},
             },
         }
 
+    def not_measured(reason, transformation_errors=None):
+        """No verdict: the value is None and dataCollection.status is "error", so the evaluator
+        shows Not evaluated instead of a failed check. The reason is fixed text; exception text
+        goes under transformation errors only."""
+        return create_response(None, fail_reasons=[reason], api_errors=[reason],
+                               transformation_errors=transformation_errors)
+
+    def http_status(value):
+        """An HTTP status as a number: a number, or text such as "401" or " 403 ". Booleans, blank
+        or non-numeric text and any other type are None, which is not an error."""
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            digits = value.strip()
+            if digits.isascii() and digits.isdigit():
+                return int(digits)
+        return None
+
+    def marker_error(obj):
+        """Fixed reason when this one object says the call failed (error, errors, or an HTTP
+        status of 400 or more in status, statusCode or status_code), else None. The vendor's own
+        response text is never copied into the reason."""
+        if obj.get("error") or obj.get("errors"):
+            return "Harmony Email & Collaboration answered with an error; nothing is measured."
+        for field in ("status", "statusCode", "status_code"):
+            code = http_status(obj.get(field))
+            if code is not None and code >= 400:
+                return "Harmony Email & Collaboration answered with an HTTP error; nothing is measured."
+        return None
+
     def hec_body(data):
         """The HEC API answers {"responseEnvelope": {...}, "responseData": [...]}. Unwrap
-        Integration-Service wrappers until that shape is found; anything else is None."""
+        Integration-Service wrappers until that shape is found. Returns (body, error): body is
+        None when the shape is not found; error is a fixed reason when a wrapper around the body
+        carries an error marker, in which case nothing inside it is trusted."""
+        cut = False  # a cut-off marker on an outer wrapper must survive the unwrap
         for attempt in range(4):
             if isinstance(data, str):
                 try:
                     data = json.loads(data)
                 except Exception:
-                    return None
+                    return None, None
             if not isinstance(data, dict):
-                return None
+                return None, None
             if isinstance(data.get("responseData"), list):
-                return data
+                if cut:
+                    data = dict(data, paginationTruncated=True)
+                return data, None
+            for blk in (data, data.get("response_metadata"), data.get("metadata")):
+                if isinstance(blk, dict) and any(str(blk.get(k)).strip().lower() in ("true", "1", "yes") for k in ("truncated", "paginationTruncated")):
+                    cut = True
+            err = marker_error(data)
+            if err:
+                return None, err
             nxt = None
             for key in ("apiResponse", "response", "result", "data", "rawResponse"):
                 if isinstance(data.get(key), (dict, str)):
                     nxt = data[key]
                     break
             if nxt is None:
-                return None
+                return None, None
             data = nxt
-        return None
+        return None, None
 
     def envelope_error(body):
+        """Fixed reason when the response body says the call failed, else None."""
         env = body.get("responseEnvelope")
         if isinstance(env, dict):
             code = env.get("responseCode")
             if code is not None and str(code) not in ("200", "0"):
-                return "HEC responseCode " + str(code) + ": " + str(env.get("responseText") or "")
+                return "Harmony Email & Collaboration answered with an error status; nothing is measured."
+        return marker_error(body)
+
+    def records_total(body):
+        """The vendor's recordsNumber as a whole number, else None. None also covers a total that is
+        stated but cannot be read (see total_unreadable)."""
+        env = body.get("responseEnvelope")
+        value = env.get("recordsNumber") if isinstance(env, dict) else None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value if value >= 0 else None
+        if isinstance(value, str):
+            digits = value.strip()
+            if digits.isdecimal():
+                return int(digits)
         return None
+
+    def total_unreadable(body):
+        """True when the vendor states a recordsNumber that cannot be read as a whole number, so
+        whether the page is complete is unknown. A missing, null or blank total states nothing."""
+        env = body.get("responseEnvelope")
+        value = env.get("recordsNumber") if isinstance(env, dict) else None
+        if value is None or (isinstance(value, str) and value.strip().lower() in ("", "none", "null")):
+            return False
+        return records_total(body) is None
+
+    def more_pages(body):
+        """"more" when the response says records remain beyond this page: a scrollId that is not
+        empty (the stored raw form writes null as "None"), or a recordsNumber larger than the page.
+        "unknown" when it states a recordsNumber that cannot be read, so nobody knows whether the page
+        is complete. "" when the page is complete. Anything but "" cannot prove an absence.
+        Integration-Service pages this query and marks a read it cut off (page cap, early end of the
+        scroll) with responseEnvelope.truncated or paginationTruncated: that is "more" too."""
+        env = body.get("responseEnvelope")
+        for holder in (env if isinstance(env, dict) else {}, body):
+            for mark in ("truncated", "paginationTruncated"):
+                if str(holder.get(mark)).strip().lower() in ("true", "1", "yes"):
+                    return "more"
+            token = holder.get("scrollId")
+            if token and str(token).strip().lower() not in ("", "none", "null"):
+                return "more"
+        total = records_total(body)
+        # HEC caps recordsNumber at 10000: a total at the cap means "at least 10000", never a complete read,
+        # whatever the row count (IS stops at the cap, so more rows than the cap is still a partial read).
+        if total is not None and (total >= 10000 or total > len(body["responseData"])):
+            return "more"
+        if total_unreadable(body):
+            return "unknown"
+        return ""
+
+    def unproven(what, summary, partial, unreadable, capped):
+        """No verdict: `what` rests on records that were not read, because the response is one page
+        of several (partial), the vendor's total sits at its 10000 cap (capped), or entries could not be
+        read (unreadable). Fixed text, with errorCode vendor_count_capped or partial_read."""
+        causes = []
+        if capped:
+            causes.append("the vendor reports at least 10000 events in the window, the most its API will count "
+                          "or return, so the window can never be read in full")
+        elif partial == "unknown":
+            causes.append("the vendor's record total could not be read, so the response may be a partial page")
+        elif partial:
+            causes.append("the response is a partial page (the vendor reports more records than it returned)")
+        if unreadable:
+            causes.append(str(unreadable) + (" entry" if unreadable == 1 else " entries") +
+                          " in the response could not be read")
+        reason = "; ".join(causes)
+        reason = reason[:1].upper() + reason[1:] + ", so " + what + " is not proven; nothing is measured."
+        return create_response(None, fail_reasons=[reason], api_errors=[reason],
+                               input_summary=dict(summary, partialPage=(partial == "more"),
+                                                  recordsNumberUnreadable=(partial == "unknown"),
+                                                  vendorCountCapped=capped, unreadableEntries=unreadable),
+                               error_code="vendor_count_capped" if capped else "partial_read")
 
     def text(value):
         """Scalar as a trimmed string; the stored raw form writes null as "None"."""
@@ -85,31 +211,53 @@ def transform(input):
             return value
         return text(value).lower() in ("true", "1", "yes")
 
-    def action_list(record):
-        acts = record.get("actions")
-        if isinstance(acts, str):
+    def read_json(value):
+        """(parsed, readable). A missing, blank or "None" value is readable and empty (None). Text is
+        parsed as JSON and text that does not parse is not readable. Anything else is returned as is."""
+        if isinstance(value, str):
+            if text(value) == "":
+                return None, True
             try:
-                acts = json.loads(acts)
+                return json.loads(value), True
             except Exception:
-                acts = None
-        return [a for a in acts if isinstance(a, dict)] if isinstance(acts, list) else []
+                return None, False
+        return value, True
+
+    def read_actions(record):
+        """(actions, readable): the action objects of an event record. A missing, blank or "None"
+        actions field is readable and empty. Text that is not JSON, a value that is not a list, or an
+        entry that is not an object makes the record not readable."""
+        acts, readable = read_json(record.get("actions"))
+        if not readable:
+            return [], False
+        if acts is None:
+            return [], True
+        if not isinstance(acts, list):
+            return [], False
+        good = [a for a in acts if isinstance(a, dict)]
+        return good, len(good) == len(acts)
 
     try:
         if isinstance(input, bytes):
             input = input.decode("utf-8")
-        body = hec_body(input)
+        body, err = hec_body(input)
+        if err:
+            return not_measured(err)
         if body is None:
-            return create_response(False, fail_reasons=["No Harmony Email & Collaboration response "
-                                   "(responseData) in the input; nothing is proven"],
-                                   api_errors=["Unrecognised or error response"])
+            return not_measured("No readable Harmony Email & Collaboration response (responseData) in the "
+                                "input; nothing is measured.")
         err = envelope_error(body)
         if err:
-            return create_response(False, fail_reasons=[err], api_errors=[err])
+            return not_measured(err)
         records = [r for r in body["responseData"] if isinstance(r, dict)]
+        unreadable = len(body["responseData"]) - len(records)
         words = ("quarantine", "restore", "delete", "move")
         moves = []
         for r in records:
-            for a in action_list(r):
+            acts, readable = read_actions(r)
+            if not readable:
+                unreadable = unreadable + 1
+            for a in acts:
                 at = text(a.get("actionType")).lower()
                 for w in words:
                     if w in at:
@@ -120,17 +268,32 @@ def transform(input):
         for a in moves:
             k = text(a.get("actionType")).lower()
             kinds[k] = kinds.get(k, 0) + 1
-        summary = {"recordsOnFirstPage": len(records), "moveActions": len(moves),
-                   "moveActionsMissingAuditFields": len(incomplete), "moveActionTypes": kinds, "windowDays": 30}
-        if not moves:
-            return create_response(False, fail_reasons=["No quarantine, restore, delete or move action appears in the "
-                                   "event log for the last 30 days, so no audit trail is evidenced"], input_summary=summary)
+        types = {}
+        for r in records:
+            t = text(r.get("type")).lower() or "unknown"
+            types[t] = types.get(t, 0) + 1
+        partial = more_pages(body)
+        total = records_total(body)
+        summary = {"recordsRead": len(records), "recordsNumber": total, "eventTypes": types,
+                   "moveActions": len(moves), "moveActionsMissingAuditFields": len(incomplete),
+                   "moveActionTypes": kinds, "partialRead": bool(partial or unreadable), "windowDays": 30}
+        gap = None
         if incomplete:
-            return create_response(False, fail_reasons=[str(len(incomplete)) + " of " + str(len(moves)) + " message-move "
-                                   "action(s) lack createTime or relatedEntityId, so the trail is not auditable"],
-                                   input_summary=summary)
-        return create_response(True, pass_reasons=["All " + str(len(moves)) + " message-move action(s) in the event log "
-                               "carry actionType, createTime and relatedEntityId"], input_summary=summary)
+            gap = str(len(incomplete)) + " of " + str(len(moves)) + " message-move action(s) lack createTime or relatedEntityId"
+        if len(incomplete) < len(moves):
+            # the trail exists and records who-what-when; records not read cannot undo that
+            scope = " in the records read (not the whole window)" if (partial or unreadable) else ""
+            return create_response(True, pass_reasons=[str(len(moves) - len(incomplete)) + " message-move action(s)" +
+                                   scope + " carry actionType, createTime and relatedEntityId"], input_summary=summary,
+                                   findings=[gap + "; other audited moves prove the trail exists"] if gap else None)
+        if partial or unreadable:
+            # an unread record may still hold an audited move, so neither "no move" nor "only gaps" is proven
+            capped = total is not None and total >= 10000
+            return unproven("that the window holds an audited message-move action", summary, partial, unreadable, capped)
+        if moves:
+            return create_response(False, fail_reasons=[gap + ", so the trail is not auditable"], input_summary=summary)
+        return create_response(False, fail_reasons=["No quarantine, restore, delete or move action appears in the "
+                               "events read for the last 30 days, so no audit trail is evidenced"], input_summary=summary)
     except Exception as e:
-        return create_response(False, fail_reasons=["Transformation error"],
-                               transformation_errors=[str(e)])
+        return not_measured("The response could not be processed; nothing is measured.",
+                            transformation_errors=[str(e)])

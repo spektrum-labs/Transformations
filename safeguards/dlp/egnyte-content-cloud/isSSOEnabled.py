@@ -165,7 +165,7 @@ def rows_short_of_total(data, rows):
     """True when the body reports more users than it carries.
 
     GET /pubapi/v2/users returns at most 100 users per call with totalResults for the
-    whole domain. A verdict over one page is a verdict over part of the estate, so a
+    whole domain. A verdict over one page is a verdict over part of the assets in scope, so a
     short read is not measured rather than judged.
     """
     if not isinstance(data, dict):

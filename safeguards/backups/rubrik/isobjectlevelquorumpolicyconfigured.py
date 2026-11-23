@@ -7,7 +7,8 @@ Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas
         https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/customTprPolicies/
 
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
-unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
+unrecognised body is None with dataCollection status "error", so Token-Service records it as not
+evaluated rather than as a gap. Never True from missing data.
 """
 import json
 from datetime import datetime, timezone
@@ -47,10 +48,14 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     errors = transformation_errors or []
+    # Not measured is read off the value, so every path that leaves the criterion None -- the except
+    # branch included -- reports it to Token-Service as not evaluated rather than as a gap.
+    measured = result.get(KEY) is not None
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "success", "errors": []},
+            "dataCollection": {"status": "success" if measured else "error",
+                               "errors": [] if measured else (fail_reasons or errors or ["No reading."])},
             "validation": {
                 "status": validation.get("status", "unknown"),
                 "errors": validation.get("errors", []),
@@ -79,7 +84,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def unknown_value():
-    return False
+    return None
 
 
 def fail(validation, reason, recommendation=None, summary=None, extra=None, value=None):
@@ -231,7 +236,7 @@ def evaluate(input):
               and not isinstance(p.get("numberOfProtectableObjects"), bool) and p.get("numberOfProtectableObjects") > 0]
     summary = {"isTprEnabled": cfg.get("isTprEnabled"), "customPolicies": len(policies), "objectScopedPolicies": scoped}
     if cfg.get("isTprEnabled") is not True:
-        return fail(validation, "Quorum Authorization (TPR) is disabled for the organization.", "Enable Quorum Authorization in RSC Settings.", summary)
+        return fail(validation, "Quorum Authorization (TPR) is disabled for the organization.", "Enable Quorum Authorization in RSC Settings.", summary, value=False)
     if not scoped:
-        return fail(validation, "Quorum Authorization is enabled but no custom policy covers protectable objects.", "Create an object-scoped TPR policy.", summary)
+        return fail(validation, "Quorum Authorization is enabled but no custom policy covers protectable objects.", "Create an object-scoped TPR policy.", summary, value=False)
     return ok(validation, True, "Quorum Authorization is enabled and object-scoped policies exist: " + ", ".join(scoped) + ".", summary)

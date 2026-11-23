@@ -1,0 +1,41 @@
+{
+  "name": "securityRatingScore",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The external security rating score, an integer from 0 to 100, that an outside rating service currently publishes for the one company domain the integration is configured for. Higher is a better rating.",
+  "valueType": "integer",
+  "unit": "unknown",
+  "domain": {
+    "min": 0,
+    "max": 100
+  },
+  "population": "the one company domain the integration is configured for; the value is that company's published score, not an average over assets or domains",
+  "polarity": "higher_is_better",
+  "evidenceRequiredForTrue": "A successful, authenticated read of the rating service's company summary that names the domain, carries a finished grade (A to F) and a whole-number score from 0 to 100. An error or refused answer, an empty or unrecognised body, a rating still being calculated, or a body that only happens to hold a score field is not measured.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/crq/securityscorecard/securityRatingScore.py (SecurityScorecard public API reference, GET /companies/{scorecard_identifier}, schema CompanySummary: grade A to F or ?, score integer 0 to 100, undefined while calculating; read 2026-10-12)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered so the SecurityScorecard transform can emit it. No other transform emits this name. The score scale is the vendor's documented 0 to 100; no requirement asks the key yet, so the bar is not defined here."
+    }
+  ],
+  "notes": "Reports the figure only. The bar a company must clear is a requirement's comparison, not this key's. Other rating services (a different scale or a letter grade) should not reuse this key unless their scale is 0 to 100 and higher is better."
+}
