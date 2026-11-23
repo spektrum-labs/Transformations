@@ -73,7 +73,7 @@ def transform(input):
                 "note": "CrashPlan returned no readable security settings (empty body or an "
                         "error response), so encryption was not verified for this tenant. "
                         "CrashPlan does encrypt by default, but that is a product fact and "
-                        "not a reading of this estate.",
+                        "not a reading of this environment.",
             }
 
         # CrashPlan always encrypts data by default
@@ -120,7 +120,7 @@ def transform(input):
         # backups as encrypted, and said so with the same confidence as a real reading.
         # Measured 2026-09-21: transform(None) returned {"isBackupEncrypted": true,
         # "parseError": "Input must be JSON string, bytes, or dict"}. A criterion answered
-        # from a parse failure is not a measurement of this customer's estate.
+        # from a parse failure is not a measurement of this customer's environment.
         #
         # The vendor-default reasoning is not wrong and is kept where it belongs: in the
         # success path above, which applies it to a response that WAS read and that did not
@@ -131,7 +131,7 @@ def transform(input):
             "encryptionManaged": False,
             "note": "Could not read CrashPlan security settings, so encryption was not "
                     "verified for this tenant. CrashPlan does encrypt by default, but that "
-                    "is a product fact and not a reading of this estate -- re-run once the "
+                    "is a product fact and not a reading of this environment -- re-run once the "
                     "call succeeds.",
             "parseError": str(e)
         }

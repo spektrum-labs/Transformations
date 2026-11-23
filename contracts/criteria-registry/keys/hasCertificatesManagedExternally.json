@@ -1,0 +1,40 @@
+{
+  "name": "hasCertificatesManagedExternally",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when every outbound trust certificate object a managed firewall's rulestack uses points to a key held in an external secrets manager rather than stored in the firewall service.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "outbound trust certificate objects of the rulestacks used by the managed firewalls; denominator = every certificate object read",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete read of every such certificate object, each with a running signer reference that is a secrets-manager secret.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-cloud-ngfw/hasCertificatesManagedExternally.py and its test file (synthetic fixtures)",
+    "Public OpenAPI reference for Cloud NGFW for AWS, pan.dev openapi-specs/cloudngfw/aws (ManageNGFW, ManageRulestacks, ManageCertificateObjects), rendered at https://pan.dev/cloudngfw/aws/api/"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered so the Cloud NGFW transform can emit it. Meaning written from the public reference only; no customer read, so the key stays proposed and V0."
+    }
+  ],
+  "notes": "Written for the AWS flavour, where the signer is an AWS Secrets Manager reference. Whether other tools should answer this key is not ruled. A certificate answer with no signer reference is not measured (the reference does not say absent means held elsewhere), never false."
+}

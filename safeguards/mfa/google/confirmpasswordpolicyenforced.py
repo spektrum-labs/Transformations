@@ -17,10 +17,17 @@ requires a strong password (allowedStrength STRONG), a minimum length of at leas
 enforces the requirements at sign-in (enforceRequirementsAtLogin). One weak org unit fails the
 tenant.
 
-Not measured (key false, dataCollection error, so Token-Service shows it Unevaluated): a Google
-error or missing scope, a body that is not a policy list, a list that still carries
-nextPageToken (truncated: an unread page could hold a weak policy), or a list with no
-security.password policy at all.
+A security.password policy that was read and misses the standard is false (a real finding).
+
+Not measured (key None, dataCollection error, so Token-Service shows it Not evaluated, never
+Failed): a Google error or missing scope, a body that is not JSON or not a policy list, a list
+that still carries nextPageToken with no weak policy in the pages read (truncated: an unread page
+could hold a weak policy), a list with no security.password policy at all, and this transform's
+own exception.
+
+A weak policy already read settles the answer even when the list is truncated: the rule needs EVERY
+policy to pass, so an unread page cannot undo it. That case is a measured false, and the reason says
+the list was incomplete. True always needs the whole list.
 
 Does not prove: password expiry or reuse settings, or that users have changed passwords since the
 policy was tightened.
@@ -28,6 +35,21 @@ policy was tightened.
 
 import json
 from datetime import datetime
+
+#: The criteria this file answers. A None among them means "not measured", never "failed".
+NONE_MEANS_NOT_EVALUATED = ('confirmPasswordPolicyEnforced',)
+
+
+def criteria_unmeasured(result):
+    """True when every criterion this file answers that the result carries is None.
+
+    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
+    is "error". The status is read per response, so it is set only when no criterion in the
+    result was measured; marking a partly measured result would hide the measured ones.
+    """
+    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
+    return len(present) > 0 and all(result[k] is None for k in present)
+
 
 CRITERIA_KEY = "confirmPasswordPolicyEnforced"
 SETTING = "security.password"
@@ -56,6 +78,12 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
                     api_errors=None, additional_findings=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
+    # reason across when the caller did not.
+    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -119,7 +147,7 @@ def policy_scope(policy):
 
 
 def not_measured(reason, validation, summary=None):
-    return create_response(result={CRITERIA_KEY: False}, validation=validation, api_errors=[reason],
+    return create_response(result={CRITERIA_KEY: None}, validation=validation, api_errors=[reason],
                            fail_reasons=["Not measured: " + reason], input_summary=summary or {})
 
 
@@ -139,12 +167,11 @@ def transform(input):
             return not_measured(error[:300], validation)
         if not isinstance(data, dict) or not isinstance(data.get("policies"), list):
             return not_measured("response is not a Cloud Identity policy list", validation)
-        if data.get("nextPageToken"):
-            return not_measured("policy list was truncated (nextPageToken present); an unread page may hold a weaker "
-                                "password policy", validation, {"policiesRead": len(data["policies"])})
+        truncated = bool(data.get("nextPageToken"))
 
         checked = []
         weak = []
+        weak_admin = 0  # weak policies an administrator set; Google's SYSTEM default is overridden by them
         for policy in data["policies"]:
             if not isinstance(policy, dict):
                 continue
@@ -167,14 +194,21 @@ def transform(input):
                             "enforceRequirementsAtLogin": enforced})
             if problems:
                 weak.append("%s: %s" % (scope, ", ".join(problems)))
+                if str(policy.get("type") or "").upper() != "SYSTEM":
+                    weak_admin += 1
 
-        summary = {"policiesRead": len(data["policies"]), "passwordPolicies": len(checked), "weakPolicies": len(weak)}
+        summary = {"policiesRead": len(data["policies"]), "passwordPolicies": len(checked), "weakPolicies": len(weak),
+                   "truncated": truncated}
+        if truncated and not weak_admin:
+            return not_measured("policy list was truncated (nextPageToken present); an unread page may hold a weaker "
+                                "password policy", validation, summary)
         if not checked:
             return not_measured("no %s policy was returned" % SETTING, validation, summary)
         if weak:
+            note = " (the policy list was truncated; a weak policy already read settles this)" if truncated else ""
             return create_response(result={CRITERIA_KEY: False, "passwordPolicies": checked}, validation=validation,
-                                   fail_reasons=["%d of %d password policies do not meet the standard: %s"
-                                                 % (len(weak), len(checked), "; ".join(weak[:10]))],
+                                   fail_reasons=["%d of %d password policies read do not meet the standard%s: %s"
+                                                 % (len(weak), len(checked), note, "; ".join(weak[:10]))],
                                    recommendations=["In the Google Admin console (Security > Password management) require "
                                                     "strong passwords of at least %d characters and enforce them at next "
                                                     "sign-in for every organizational unit" % MIN_LENGTH],
@@ -184,5 +218,5 @@ def transform(input):
                                              "and enforce them at sign-in" % (len(checked), MIN_LENGTH)],
                                input_summary=summary)
     except Exception as e:
-        return create_response(result={CRITERIA_KEY: False}, validation={"status": "error", "errors": [], "warnings": []},
+        return create_response(result={CRITERIA_KEY: None}, validation={"status": "error", "errors": [], "warnings": []},
                                transformation_errors=[str(e)], fail_reasons=["Transformation error: %s" % str(e)])

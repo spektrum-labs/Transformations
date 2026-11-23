@@ -1,0 +1,41 @@
+{
+  "name": "offlineSensorCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of endpoint agents in scope that the vendor reports as not checking in (offline), judged by the vendor's own heartbeat rule or by the integration's documented time window.",
+  "valueType": "integer",
+  "unit": "count",
+  "domain": {
+    "min": 0
+  },
+  "population": "the agents registered to the connected endpoint-protection tenant; every agent the read lists, or the vendor's own total for the tenant",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "A complete, successful read of the tenant's agent population that states how many are not checking in (0 when none). A response that does not carry the figure, an error or refused answer, or a tenant with no agents cannot show 0 and is not measured.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/epp/halcyon/offlineSensorCount.py (Halcyon public OpenAPI, GET /search/devices/metrics, DeviceMetrics.no_heartbeats; the vendor does not publish its heartbeat window, so the figure is the vendor's as given)",
+    "safeguards/epp/sentinelone/offlineSensorCount.py (existing implementation; counts agents inside a 15-day window that report inactive; not reviewed for this entry)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered so the Halcyon transform can emit it. The meaning is the key name made precise; the other implementations of this name (SentinelOne, Cortex XDR, NinjaOne, Trend Vision One) were not reviewed for this entry, so the key stays proposed and V0."
+    }
+  ],
+  "notes": "Halcyon reports a vendor-defined no-heartbeat count with no per-device timestamp in the same call, so devices long gone cannot be split out as stale; an implementation that can read a per-agent last-seen time should report stale agents as a separate figure."
+}

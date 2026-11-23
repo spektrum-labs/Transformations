@@ -14,12 +14,12 @@ def _result(payload):
 
 def test_empty_machine_inventory_never_reports_coverage_or_epp_pass():
     result = _result({"value": []})
-    assert result["requiredCoveragePercentage"] == 0
-    assert result["serverCoveragePercentage"] == 0
+    assert result["requiredCoveragePercentage"] is None
+    assert result["serverCoveragePercentage"] is None
     assert result["totalEndpointCount"] == 0
-    assert result["isEPPEnabled"] is False
-    assert result["isEPPConfigured"] is False
-    assert result["isEPPLoggingEnabled"] is False
+    assert result["isEPPEnabled"] is None
+    assert result["isEPPConfigured"] is None
+    assert result["isEPPLoggingEnabled"] is None
 
 
 def test_machine_inventory_uses_onboarding_and_reporting_evidence():

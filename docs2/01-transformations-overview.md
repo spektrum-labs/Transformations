@@ -76,7 +76,7 @@ flowchart TD
 Walkthrough: which of your two possible paths production actually fetches is decided entirely by data in Integration-Service's DB, not by anything in this repo — and either path 404s silently (as `isEvaluated: False`) if casing drifts. Full mechanics and receipts: [02-execution-contract.md](02-execution-contract.md#the-case-sensitivity-dead-zone); the per-directory reachability census: [04-catalog.md](04-catalog.md).
 
 > [!CAUTION]
-> **Changing the case of any committed path is a production change.** A "normalize casing" cleanup would sever every exact-case DB URL; adding a camelCase filename for a minted-default vendor creates a file production can never fetch. The team has already been bitten: at the 2026-04-22 merge-base, `emailsecurity/mimecast/` contained both `isDNSConfigured.py` and `isdnsconfigured.py` — a state a case-insensitive macOS checkout cannot even represent — and both branches independently deleted the camelCase twin.
+> **Changing the case of any committed path is a production change.** A "normalize casing" cleanup would sever every exact-case DB URL; adding a camelCase filename for a minted-default vendor creates a file production can never fetch. The team has already been bitten: at the 2026-04-22 merge-base, `emailsecurity/mimecast/` contained both `isDNSConfigured.py` and `isdnsconfigured.py` — a state a case-insensitive macOS checkout cannot even represent — and both branches independently deleted the camelCase copy.
 
 > [!TIP]
 > Your macOS worktree is case-insensitive and lies about casing. Check with `git ls-tree -r origin/main --name-only`, never `ls`.

@@ -138,7 +138,13 @@ def evaluate(data, validation):
         return respond(None, "networkAcls.virtualNetworkRules is not a list", validation)
     extra = {"virtualNetworkRuleCount": len(rules), "defaultAction": acls.get("defaultAction")}
     if len(rules) > 0:
-        return respond(True, str(len(rules)) + " virtual network rule(s) configured", validation, extra)
+        # With a default action of Allow the vault admits every network, so the rules restrict nothing.
+        if acls.get("defaultAction") != "Deny":
+            return respond(False, str(len(rules)) + " virtual network rule(s) exist but the firewall default action is "
+                           + str(acls.get("defaultAction") or "not set") + ", so the vault admits all networks",
+                           validation, extra, ["Set the firewall default action to Deny so the virtual network rules apply"])
+        return respond(True, str(len(rules)) + " virtual network rule(s) configured behind a deny-by-default firewall",
+                       validation, extra)
     return respond(False, "No virtual network rule is configured on the vault", validation, extra,
                    ["Add a virtual network service endpoint rule, or use a private endpoint"])
 

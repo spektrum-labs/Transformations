@@ -71,9 +71,33 @@ def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, dict) else {}
 
-    api_auth = data.get("apiAuthentication") or {}
-    ip_restrictions = api_auth.get("ipRestrictionsForKeys") or {}
-    enabled = bool(ip_restrictions.get("enabled") or False)
+    api_auth = data.get("apiAuthentication")
+    api_auth = api_auth if isinstance(api_auth, dict) else {}
+    ip_restrictions = api_auth.get("ipRestrictionsForKeys")
+    ip_restrictions = ip_restrictions if isinstance(ip_restrictions, dict) else {}
+    enabled = ip_restrictions.get("enabled")
+    if not isinstance(enabled, bool):
+        # No usable value (empty body, vendor error body, field absent): nothing was measured, so
+        # the criterion is None with a dataCollection error, never a fail.
+        problem = (
+            "The Meraki response did not include apiAuthentication.ipRestrictionsForKeys.enabled; "
+            "nothing to measure."
+        )
+        return create_response(
+            result={"isApiKeyIpRestrictionEnabled": None},
+            validation=validation,
+            fail_reasons=[problem],
+            recommendations=[
+                "Verify the Meraki organization API settings are readable with this key "
+                "(Organization > Settings > Dashboard API access)."
+            ],
+            api_errors=[problem],
+            metadata={
+                "transformationId": "isApiKeyIpRestrictionEnabled",
+                "vendor": "Cisco Meraki MX",
+                "category": "firewalls",
+            },
+        )
     ranges = ip_restrictions.get("ranges") or []
     range_count = len(ranges) if isinstance(ranges, list) else 0
 

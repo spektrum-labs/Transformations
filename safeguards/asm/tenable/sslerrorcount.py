@@ -64,7 +64,7 @@ def read_assets(data):
     """POST /inventory returns {"total", "stats", "assets": [...]}. Under the engine's cursor
     pagination `assets` holds every page; `total` and `stats` survive from page 1. A bare list is
     tolerated. Returns (assets, total, stats, partial) -- `partial` is True when the pages we hold
-    are fewer than the estate, so a count derived from them is a LOWER BOUND and says so."""
+    are fewer than all assets in scope, so a count derived from them is a LOWER BOUND and says so."""
     if isinstance(data, list):
         return data, len(data), {}, False
     if not isinstance(data, dict):
@@ -118,8 +118,8 @@ def count_matching(assets, predicate, sample_key="bd.original_hostname", limit=2
 
 
 def inventory_problem(data):
-    """Why this body proves nothing about the estate, else None. POST /inventory always answers with an
-    `assets` list; an empty, missing or error reply (no list, or a list with no asset) is not a clean estate."""
+    """Why this body proves nothing about the environment, else None. POST /inventory always answers with an
+    `assets` list; an empty, missing or error reply (no list, or a list with no asset) is not proof of no findings in scope."""
     if isinstance(data, list):
         assets = data
     elif isinstance(data, dict) and isinstance(data.get("assets"), list):
@@ -152,7 +152,7 @@ def run_criterion(input, criteria_key, evaluate, transformation_id):
         value, extras, passes, fails, recs, api_errors = evaluate(data)
         if value == 0 and not isinstance(value, bool) and extras.get("partial") is True:
             reason = (f"scanned {extras.get('assetsScanned')} of {extras.get('inventoryTotal')} assets; "
-                      "zero on a partial inventory is not a clean estate, so the count is unknown")
+                      "zero on a partial inventory is not proof of no findings in scope, so the count is unknown")
             return unevaluated(criteria_key, reason, validation, transformation_id, extras)
         return create_response({criteria_key: value, **extras}, validation, pass_reasons=passes, fail_reasons=fails,
                                recommendations=recs, input_summary={criteria_key: value, **extras},

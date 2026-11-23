@@ -357,3 +357,21 @@ def test_a_bare_data_wrapper_is_unwrapped(loader, key):
     """Every one of these files unwrapped {"data": {...}} on main, and nothing has confirmed
     which shape Integration-Service sends, because they have never run live."""
     assert run(loader, key, {"data": CASES[key][0]}) == (True, "success")
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_vnet_rules_behind_an_allow_all_firewall_restrict_nothing(loader):
+    rule = {"id": "/subscriptions/s/resourceGroups/r/providers/Microsoft.Network/virtualNetworks/v/subnets/s1"}
+    for action, expected in (("Deny", True), ("Allow", False)):
+        body = vault(networkAcls={"defaultAction": action, "bypass": "AzureServices", "ipRules": [],
+                                  "virtualNetworkRules": [rule]})
+        assert run(loader, "isVNetIntegrationEnabled", body) == (expected, "success"), action
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_policy_states_count_only_rows_that_say_non_compliant(loader):
+    compliant_row = {"complianceState": "Compliant", "isCompliant": True}
+    silent_row = {"policyAssignmentName": "test"}
+    assert run(loader, "isAzurePolicyCompliant", {"value": [compliant_row]}) == (True, "success")
+    assert run(loader, "isAzurePolicyCompliant", {"value": [compliant_row, silent_row]}) == (None, "error")
+    assert run(loader, "isAzurePolicyCompliant", {"value": [silent_row, POLICY_STATES["value"][0]]}) == (False, "success")

@@ -10,6 +10,34 @@
 import json
 from datetime import datetime, timezone, timedelta
 
+VENDOR = "NetBackup"
+PRODUCT = "NetBackup"
+METHOD = "listBackupJobs"
+
+
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status is derived from the value, never from a key list:
+    None means the body could not answer the check (not measured, "error"); True or False was measured."""
+    result = {key: value, "reason": reason}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": VENDOR, "product": PRODUCT, "method": METHOD,
+                         "category": "backups", "evaluatedAt": datetime.now(timezone.utc).isoformat(),
+                         "schemaVersion": "2.0"},
+        },
+    }
+
 
 def transform(input):
     """
@@ -51,20 +79,20 @@ def transform(input):
     try:
         doc, problem = jsonapi(input, True)
         if doc is None:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         cutoff = datetime.now(timezone.utc) - timedelta(days=7)
         recent = []
         oldest = None
         for item in doc.get("data"):
             att = item.get("attributes") if isinstance(item, dict) else None
             if not isinstance(att, dict):
-                return {key: False, "reason": "A job record has no attributes"}
+                return respond(key, None, "A job record has no attributes")
             if str(att.get("jobType") or "").upper() != "BACKUP" or str(att.get("state") or "").upper() != "DONE":
                 continue
             end = att.get("endTime")
             status = att.get("status")
             if not isinstance(end, str) or not isinstance(status, int) or isinstance(status, bool):
-                return {key: False, "reason": "Job " + str(att.get("jobId")) + " has no endTime or status"}
+                return respond(key, None, "Job " + str(att.get("jobId")) + " has no endTime or status")
             when = datetime.fromisoformat(end.replace("Z", "+00:00"))
             if when.tzinfo is None:
                 when = when.replace(tzinfo=timezone.utc)
@@ -77,8 +105,10 @@ def transform(input):
         truncated = bool(pag.get("next")) and oldest is not None and oldest >= cutoff
 
         ok = [a for a in recent if a.get("status") in [0, 1]]
+        if not ok and truncated:
+            return respond(key, None, "No successful backup job on the first page, and more jobs from the last 7 days were not read")
         if not ok:
-            return {key: False, "reason": "No backup job finished successfully in the last 7 days (" + str(len(recent)) + " finished)"}
-        return {key: True, "reason": str(len(ok)) + " backup jobs finished successfully in the last 7 days"}
+            return respond(key, False, "No backup job finished successfully in the last 7 days (" + str(len(recent)) + " finished)")
+        return respond(key, True, str(len(ok)) + " backup jobs finished successfully in the last 7 days")
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "Transformation error: " + str(e)[:300], {"error": str(e)[:300]})

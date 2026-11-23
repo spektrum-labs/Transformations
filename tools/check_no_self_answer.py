@@ -4,7 +4,7 @@ THE RULE. A transform is handed a vendor's API response and must decide somethin
 If it answers criterion X by reading a field literally named X out of that response, it has
 asked the question of the answer. The vendor does not send `isFirewallEnabled`; nothing does.
 Whatever such a line evaluates to is a property of our own default, not of the customer's
-estate.
+environment.
 
 WHY THIS IS A DIFFERENT DEFECT FROM THE FOUR EXISTING CONTRACTS, none of which sees it:
 

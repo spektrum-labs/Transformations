@@ -52,12 +52,11 @@ def leg_error(leg):
     if not isinstance(leg, dict):
         return "not an object"
     if leg.get("error") is True:
-        return "Integration-Service error: " + str(leg.get("message") or leg.get("errorMessage") or "")[:200]
+        return "Integration-Service returned an error"
     if leg.get("__type"):
-        return "AWS error " + str(leg.get("__type"))
+        return "AWS returned an error"
     if isinstance(leg.get("ErrorResponse"), dict):
-        err = leg["ErrorResponse"].get("Error") or {}
-        return "AWS error " + str(err.get("Code") if isinstance(err, dict) else err)
+        return "AWS returned an error"
     return None
 
 
@@ -87,7 +86,7 @@ def active_instance_count(leg):
     instances = leg.get("Instances")
     if not isinstance(instances, list):
         return None
-    if leg.get("NextToken"):
+    if leg.get("NextToken") or leg.get("nextToken"):
         return None
     return len([i for i in instances if isinstance(i, dict) and i.get("Status") == "ACTIVE"])
 
