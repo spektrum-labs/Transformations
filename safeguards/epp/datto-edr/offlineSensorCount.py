@@ -102,11 +102,10 @@ def complete_read(input):
         return None, "Datto EDR returned an error instead of an agent list: " + error
     if agents is None:
         return None, "No Datto EDR agent list in the response; nothing to evaluate."
-    agents = [a for a in agents if isinstance(a, dict)]
     if len(agents) >= READ_LIMIT:
         return None, ("The agent list filled the " + str(READ_LIMIT) + "-agent read limit, so it may be cut short;"
                       " a partial read is not scored.")
-    return agents, None
+    return [a for a in agents if isinstance(a, dict)], None
 
 
 def installed_agents(agents):

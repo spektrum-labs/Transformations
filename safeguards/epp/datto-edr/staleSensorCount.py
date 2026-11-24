@@ -3,7 +3,7 @@
 Count of installed agents whose last heartbeat is more than WINDOW_DAYS days older than the
 newest heartbeat in the response (or that carry no heartbeat). The window is measured from the
 newest heartbeat, not the wall clock (same rule as SentinelOne). None when the agent list is
-missing, an error, possibly truncated, or holds no installed agent.
+missing, an error, possibly truncated, holds no installed agent, or no agent has a readable heartbeat.
 """
 import json
 from datetime import datetime
@@ -101,11 +101,10 @@ def complete_read(input):
         return None, "Datto EDR returned an error instead of an agent list: " + error
     if agents is None:
         return None, "No Datto EDR agent list in the response; nothing to evaluate."
-    agents = [a for a in agents if isinstance(a, dict)]
     if len(agents) >= READ_LIMIT:
         return None, ("The agent list filled the " + str(READ_LIMIT) + "-agent read limit, so it may be cut short;"
                       " a partial read is not scored.")
-    return agents, None
+    return [a for a in agents if isinstance(a, dict)], None
 
 
 def installed_agents(agents):
@@ -171,6 +170,9 @@ def transform(input):
     if not installed:
         return not_measured(key, "No installed Datto EDR agents in the response; there is no device to judge.", validation)
     judged, stale, newest = split_window(installed)
+    if newest is None:
+        return not_measured(key, "No installed Datto EDR agent carries a readable heartbeat; staleness cannot be measured.",
+                            validation)
     count = len(stale)
     text = (str(count) + " of " + str(len(installed)) + " installed agents have not sent a heartbeat within "
             + str(WINDOW_DAYS) + " days of the newest one.")

@@ -101,9 +101,15 @@ def test_not_a_complete_read_is_not_evaluated(key, payload):
     assert full["additionalInfo"]["dataCollection"]["status"] == "error"
 
 
-@pytest.mark.parametrize("key", ["isEPPEnabled", "offlineSensorCount"])
-def test_all_agents_stale_is_not_evaluated(key):
+@pytest.mark.parametrize("key", KEYS)
+def test_no_readable_heartbeat_is_not_evaluated(key):
     fleet = [agent(1, beat="2026-09-30T12:00:00.000Z"), agent(2, beat="2026-09-30T12:00:00.000Z")]
     fleet[0]["heartbeat"] = None
     fleet[1]["heartbeat"] = None
     assert out(key, envelope(fleet))[key] is None
+
+
+@pytest.mark.parametrize("key", KEYS)
+def test_full_read_limit_counts_raw_items(key):
+    payload = envelope([agent(i) for i in range(998)] + ["junk", 42])
+    assert out(key, payload)[key] is None
