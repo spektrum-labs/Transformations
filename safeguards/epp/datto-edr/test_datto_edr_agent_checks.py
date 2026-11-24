@@ -113,3 +113,9 @@ def test_no_readable_heartbeat_is_not_evaluated(key):
 def test_full_read_limit_counts_raw_items(key):
     payload = envelope([agent(i) for i in range(998)] + ["junk", 42])
     assert out(key, payload)[key] is None
+
+
+def test_window_is_exactly_fifteen_days():
+    fleet = [agent(1), agent(2, beat="2026-09-15T12:00:00.000Z"), agent(3, beat="2026-09-14T13:00:00.000Z")]
+    result = out("staleSensorCount", envelope(fleet))
+    assert result["staleSensorCount"] == 1  # 15d 23h behind the newest is stale; exactly 15d is not

@@ -6,7 +6,7 @@ newest heartbeat, not the wall clock (same rule as SentinelOne). None when the a
 missing, an error, possibly truncated, holds no installed agent, or no agent has a readable heartbeat.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 WINDOW_DAYS = 15
 # getAgents asks for filter={"limit":1000}; a response that fills the limit may be cut short.
@@ -139,7 +139,7 @@ def split_window(installed):
     judged = []
     stale = []
     for a, d in seen:
-        if d is not None and (newest - d).days <= WINDOW_DAYS:
+        if d is not None and (newest - d) <= timedelta(days=WINDOW_DAYS):
             judged.append(a)
         else:
             stale.append(a)
