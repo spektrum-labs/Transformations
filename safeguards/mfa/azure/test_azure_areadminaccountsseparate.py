@@ -279,7 +279,9 @@ class AzureAdminSeparationTests(unittest.TestCase):
     def test_dedicated_admin_passes(self):
         result, info = self.run_t(body([user("u1", "admin@contoso.onmicrosoft.com", skus=[ENTRA_P2])], ["u1"]))
         self.assertTrue(result[KEY], info)
-        self.assertEqual(info["evaluation"]["additionalFindings"], [])
+        # The only finding is the note that PIM-eligible assignments were not read (no such key in this body).
+        self.assertEqual([f for f in info["evaluation"]["additionalFindings"] if "PIM-eligible" not in f], [])
+        self.assertIs(result["eligibleAssignmentsRead"], False)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
   "generated_by": "tools/check_criteria_registry.py --emit-allowlist",
   "how_to_shrink": "register the key (contracts/criteria-registry/keys/<key>.json) with what is evidenced and \"unknown\" for what is not, or stop emitting it. Never add to this list by hand.",
   "count": {
-    "unregistered": 1510,
+    "unregistered": 1505,
     "type": 0
   },
   "unregistered": [
@@ -848,9 +848,7 @@
     "safeguards/epp/kaseya/vsa/epp_transform.py::isEPPEnabled",
     "safeguards/epp/kaseya/vsa/ispatchmanagementenabled.py::isPatchManagementValid",
     "safeguards/epp/kaseya/vsa/isremovablemediacontrolled.py::isRemovableMediaControlled",
-    "safeguards/epp/liongard/isagentdeployed.py::activePercentage",
     "safeguards/epp/liongard/isagentdeployed.py::isAgentDeployed",
-    "safeguards/epp/liongard/isagentdeployed.py::onlinePercentage",
     "safeguards/epp/liongard/isedrdeployed.py::coveragePercentage",
     "safeguards/epp/liongard/isedrdeployed.py::deployedCount",
     "safeguards/epp/liongard/isedrdeployed.py::isEDRDeployed",
@@ -858,10 +856,7 @@
     "safeguards/epp/liongard/iseppconfigured.py::configurationPercentage",
     "safeguards/epp/liongard/iseppconfigured.py::configuredCount",
     "safeguards/epp/liongard/iseppconfigured.py::totalCount",
-    "safeguards/epp/liongard/iseppdeployed.py::coveragePercentage",
-    "safeguards/epp/liongard/iseppdeployed.py::deployedCount",
     "safeguards/epp/liongard/iseppdeployed.py::isEPPDeployed",
-    "safeguards/epp/liongard/iseppdeployed.py::totalCount",
     "safeguards/epp/liongard/ispatchmanagementenabled.py::coveragePercentage",
     "safeguards/epp/liongard/ispatchmanagementvalid.py::coveragePercentage",
     "safeguards/epp/liongard/ispatchmanagementvalid.py::isPatchManagementValid",

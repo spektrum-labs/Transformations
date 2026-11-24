@@ -9,13 +9,71 @@ Reasons: every result leads with what the inventory shows (onboarded / eligible 
 reporting, servers). Eligible machines with none onboarded is a finding for this tool (false / 0).
 No eligible machine at all is an empty result and proves nothing, so it is None; the onboard-or-disconnect
 hint is guidance only.
+
+isEPPLoggingEnabled: every judged onboarded machine reports healthStatus Active. Judged means seen within
+ACTIVE_WINDOW_DAYS of the newest lastSeen in the inventory (endpoint rules 2026-09-29; when the newest is
+itself older than the window the fleet is dark and every dated machine is stale) and not dormant. A
+machine whose healthStatus is Inactive has sent no signal for days (Microsoft: over seven), which is a
+dormant device -- an idle phone, a machine on a shelf -- not a broken sensor; requiring every onboarded
+machine to be Active failed tenants for devices nobody uses. Stale and Inactive machines are left out and
+reported (loggingExcludedStaleDevices, loggingExcludedInactiveDevices). Any other healthStatus
+(ImpairedCommunication, NoSensorData, ...) still fails, and no judged machine left is False.
 """
 
 import json
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 
 
 HEALTHY_SENSOR_STATES = {"active"}
+DORMANT_SENSOR_STATES = {"inactive"}
+ACTIVE_WINDOW_DAYS = 15
+
+
+def parse_time(value):
+    """An ISO date or timestamp (any fraction, then Z, an explicit offset, or nothing) as naive UTC, or None."""
+    if not isinstance(value, str):
+        return None
+    match = re.match(r"^(\d{4}-\d{2}-\d{2})(T\d{2}:\d{2}:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})?$", value.strip())
+    if not match:
+        return None
+    try:
+        when = datetime.fromisoformat(match.group(1) + (match.group(2) or "T00:00:00"))
+    except ValueError:
+        return None
+    offset = match.group(4)
+    if offset and offset != "Z":
+        shift = timedelta(hours=int(offset[1:3]), minutes=int(offset[4:6]))
+        when = when - shift if offset[0] == "+" else when + shift
+    return when
+
+
+def logging_population(onboarded):
+    """(judged, stale, inactive): the onboarded machines isEPPLoggingEnabled judges (see the docstring).
+
+    A lastSeen more than a day in the future is a clock fault and is not used for the newest-contact
+    cutoff. A machine with no readable lastSeen is judged, not dropped.
+    """
+    now = datetime.utcnow()
+    seen = [parse_time(m.get("lastSeen")) for m in onboarded]
+    known = [w for w in seen if w is not None and w <= now + timedelta(days=1)]
+    cutoff = None
+    if known:
+        cutoff = max(known) - timedelta(days=ACTIVE_WINDOW_DAYS)
+        wall_cutoff = now - timedelta(days=ACTIVE_WINDOW_DAYS)
+        if max(known) < wall_cutoff:
+            cutoff = wall_cutoff
+    judged = []
+    stale = 0
+    inactive = 0
+    for machine, when in zip(onboarded, seen):
+        if cutoff is not None and when is not None and when < cutoff:
+            stale = stale + 1
+        elif str(machine.get("healthStatus") or "").lower() in DORMANT_SENSOR_STATES:
+            inactive = inactive + 1
+        else:
+            judged.append(machine)
+    return judged, stale, inactive
 
 
 def is_true(value):
@@ -128,6 +186,7 @@ def evaluate_machines(data):
         if machine.get("lastSeen")
         and str(machine.get("healthStatus") or "").lower() in HEALTHY_SENSOR_STATES
     ]
+    judged, stale, inactive = logging_population(onboarded)
     servers = [machine for machine in eligible if "server" in str(machine.get("osPlatform") or "").lower()]
     protected_servers = [machine for machine in servers if str(machine.get("onboardingStatus") or "").lower() == "onboarded"]
     edr_servers = [machine for machine in eligible if os_class(machine) == "server"]
@@ -163,6 +222,9 @@ def evaluate_machines(data):
             "eligibleDevices": 0,
             "protectedDevices": 0,
             "reportingDevices": 0,
+            "loggingJudgedDevices": 0,
+            "loggingExcludedStaleDevices": 0,
+            "loggingExcludedInactiveDevices": 0,
         }
         result.update(edr_split)
         return result
@@ -171,7 +233,8 @@ def evaluate_machines(data):
     result = {
         "isEPPEnabled": bool(onboarded),
         "isEPPConfigured": bool(eligible) and len(onboarded) == len(eligible),
-        "isEPPLoggingEnabled": bool(onboarded) and len(reporting) == len(onboarded),
+        "isEPPLoggingEnabled": bool(judged) and all(
+            str(machine.get("healthStatus") or "").lower() in HEALTHY_SENSOR_STATES for machine in judged),
         "requiredCoveragePercentage": coverage,
         "serverCoveragePercentage": server_coverage,
         "totalEndpointCount": len(eligible),
@@ -179,6 +242,9 @@ def evaluate_machines(data):
         "eligibleDevices": len(eligible),
         "protectedDevices": len(onboarded),
         "reportingDevices": len(reporting),
+        "loggingJudgedDevices": len(judged),
+        "loggingExcludedStaleDevices": stale,
+        "loggingExcludedInactiveDevices": inactive,
     }
     result.update(edr_split)
     return result
@@ -206,6 +272,10 @@ def describe(result):
             str(onboarded) + " of " + str(eligible) + " eligible machines are onboarded to Defender for Endpoint ("
             + str(result["requiredCoveragePercentage"]) + "%)",
             str(result["reportingDevices"]) + " of " + str(onboarded) + " onboarded machines report an active sensor",
+            "isEPPLoggingEnabled judged " + str(result["loggingJudgedDevices"]) + " onboarded machines, leaving out "
+            + str(result["loggingExcludedStaleDevices"]) + " last seen more than " + str(ACTIVE_WINDOW_DAYS)
+            + " days before the newest and " + str(result["loggingExcludedInactiveDevices"])
+            + " dormant (healthStatus Inactive)",
             str(result["totalServerCount"]) + " eligible servers in the inventory ("
             + str(result["serverCoveragePercentage"]) + "% onboarded)",
         ],

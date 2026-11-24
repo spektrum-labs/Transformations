@@ -19,8 +19,16 @@ Reporting: onboardingStatus "onboarded" (any casing) AND lastSeen within ACTIVE_
   isEPPEnabled / isEPPDeployed / isEDRDeployed -- at least one eligible machine is reporting.
       Onboarding to Defender for Endpoint is the EDR sensor; this is the same reading the One-Click
       definition takes (microsoft_endpoint_edrdeployed.py), plus recency.
-  isEPPLoggingEnabled -- at least one machine is reporting, and every reporting machine's
-      healthStatus is Active (its sensor is sending data).
+  isEPPLoggingEnabled -- at least one machine is reporting, and every judged onboarded machine's
+      healthStatus is Active (its sensor is sending data). Judged: seen within ACTIVE_WINDOW_DAYS of the
+      newest lastSeen in the inventory (endpoint rules 2026-09-29; when the newest is itself older than
+      the window the fleet is dark and every dated machine is stale), and not dormant. A machine whose
+      healthStatus is Inactive has stopped reporting for days (Microsoft: no signal for over seven days),
+      which is a dormant device -- an idle phone, a machine on a shelf -- not a broken sensor; requiring
+      it to be Active failed tenants for devices nobody uses. Stale and Inactive machines are left out
+      and reported (loggingExcludedStaleDevices, loggingExcludedInactiveDevices). Every other
+      healthStatus (ImpairedCommunication, NoSensorData, ...) still fails. No judged machine left is
+      False: nothing shows a sensor sending data.
 Not measured: an error body, records with no onboardingStatus (the alert list is one), a page with
 @odata.nextLink still set, no eligible machine at all, or a reporting machine that carries no
 healthStatus (one missing field used to read as a logging failure). dataCollection.status is one
@@ -122,6 +130,39 @@ def parse_time(value):
     return when
 
 
+def health_of(machine):
+    return str(machine.get("healthStatus") or "").strip().lower()
+
+
+def logging_population(onboarded):
+    """(judged, stale, inactive): the onboarded machines isEPPLoggingEnabled judges (see the docstring).
+
+    A lastSeen more than a day in the future is a clock fault: it is not used for the newest-contact
+    cutoff, so one bad stamp cannot make every other machine look stale. A machine with no readable
+    lastSeen is judged, not dropped.
+    """
+    now = datetime.utcnow()
+    seen = [parse_time(m.get("lastSeen")) for m in onboarded]
+    known = [w for w in seen if w is not None and w <= now + timedelta(days=1)]
+    cutoff = None
+    if known:
+        cutoff = max(known) - timedelta(days=ACTIVE_WINDOW_DAYS)
+        wall_cutoff = now - timedelta(days=ACTIVE_WINDOW_DAYS)
+        if max(known) < wall_cutoff:
+            cutoff = wall_cutoff
+    judged = []
+    stale = 0
+    inactive = 0
+    for machine, when in zip(onboarded, seen):
+        if cutoff is not None and when is not None and when < cutoff:
+            stale = stale + 1
+        elif health_of(machine) == "inactive":
+            inactive = inactive + 1
+        else:
+            judged.append(machine)
+    return judged, stale, inactive
+
+
 def status_of(machine):
     return str(machine.get("onboardingStatus") or "").strip().lower()
 
@@ -158,12 +199,16 @@ def measure(machines, partial):
     onboarded = [m for m in eligible if status_of(m) == "onboarded"]
     reporting = [m for m in onboarded
                  if parse_time(m.get("lastSeen")) is not None and parse_time(m.get("lastSeen")) >= cutoff]
-    healthy = [m for m in reporting if str(m.get("healthStatus") or "").strip().lower() == "active"]
+    healthy = [m for m in reporting if health_of(m) == "active"]
+    judged, stale, inactive = logging_population(onboarded)
     counts = {
         "eligibleDevices": len(eligible),
         "onboardedDevices": len(onboarded),
         "reportingDevices": len(reporting),
         "activeSensorDevices": len(healthy),
+        "loggingJudgedDevices": len(judged),
+        "loggingExcludedStaleDevices": stale,
+        "loggingExcludedInactiveDevices": inactive,
     }
     values = {}
     for key in KEYS:
@@ -174,11 +219,12 @@ def measure(machines, partial):
     # the field got "" here, fell out of healthy, and read isEPPLoggingEnabled False -- a fail
     # nobody measured, which is the failure this file exists to remove. dataCollection.status is
     # one flag for the whole response, so an unreadable sensor health leaves every key None.
-    if reporting and not all("healthStatus" in m for m in reporting):
+    if not all("healthStatus" in m for m in reporting + judged):
         return values, counts
     for key in ("isEPPEnabled", "isEPPDeployed", "isEDRDeployed"):
         values[key] = len(reporting) > 0
-    values["isEPPLoggingEnabled"] = len(reporting) > 0 and len(healthy) == len(reporting)
+    values["isEPPLoggingEnabled"] = (len(reporting) > 0 and len(judged) > 0
+                                     and all(health_of(m) == "active" for m in judged))
     return values, counts
 
 
@@ -222,6 +268,12 @@ def transform(input):
                         "within " + str(ACTIVE_WINDOW_DAYS) + " days; " + str(counts["activeSensorDevices"])
                         + " of those report an Active sensor")
                 if values["isEPPDeployed"] is not None:
+                    if counts["loggingExcludedStaleDevices"] or counts["loggingExcludedInactiveDevices"]:
+                        additional_findings.append(
+                            "isEPPLoggingEnabled judged " + str(counts["loggingJudgedDevices"]) + " onboarded "
+                            "machines; it left out " + str(counts["loggingExcludedStaleDevices"]) + " last seen more "
+                            "than " + str(ACTIVE_WINDOW_DAYS) + " days before the newest machine and "
+                            + str(counts["loggingExcludedInactiveDevices"]) + " dormant (healthStatus Inactive)")
                     # These three keys read "at least one machine is reporting", so a pass says
                     # nothing about how much of the fleet is covered. Put the gap beside the
                     # verdict so a reviewer sees it without opening the transformed response;

@@ -149,7 +149,7 @@ def set_count(alias, n):
 CASES = [
     ("backupSlaComplianceRatePercentage", SNAP, 95.0, flip(SNAP, set_count("outOfCompliance", 95)), 50.0, "inCompliance"),
     ("staleProtectionJobsCount", SNAP, 5, flip(SNAP, set_count("outOfCompliance", 40)), 40, "outOfCompliance"),
-    ("unprotectedResourcesCount", SNAP, 20, flip(SNAP, set_count("noSla", 0)), 10, "noSla"),
+    ("unprotectedResourcesCount", SNAP, 10, flip(SNAP, set_count("noSla", 0)), 0, "noSla"),
     ("complianceStatus", SNAP, True, flip(SNAP, set_count("outOfCompliance", 95)), False, "inCompliance"),
     ("confirmedLicensePurchased", SNAP, True, flip(SNAP, set_count("protectedObjects", 0)), False, "protectedObjects"),
     ("isBackupEnabled", SNAP, True, flip(SNAP, set_count("protectedObjects", 0)), False, "protectedObjects"),
@@ -368,3 +368,15 @@ def test_no_webhooks_is_a_finding_not_an_error():
     out = run("isAuditLogForwardingEnabled", {"data": {"allWebhooksV2": []}})
     assert out["transformedResponse"]["isAuditLogForwardingEnabled"] is False
     assert "No enabled webhook" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_do_not_protect_is_reported_separately_not_counted_as_unprotected():
+    """An explicit Do Not Protect assignment is a recorded decision, not a missing SLA."""
+    dnp_only = counts(activeObjects=50, protectedObjects=30, inCompliance=30, outOfCompliance=0, noSla=0, doNotProtect=20)
+    out = run("unprotectedResourcesCount", dnp_only)
+    tr = out["transformedResponse"]
+    assert tr["unprotectedResourcesCount"] == 0
+    assert tr["doNotProtectResourcesCount"] == 20
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+    with_gaps = flip(dnp_only, set_count("noSla", 4))
+    assert value("unprotectedResourcesCount", with_gaps) == 4

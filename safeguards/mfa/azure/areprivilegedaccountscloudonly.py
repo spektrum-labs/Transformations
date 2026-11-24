@@ -36,7 +36,8 @@ cannot sign in; they are counted and not judged. A role-assignable GROUP holding
 through its transitive member read (WI-3b, below): each user member is judged like a direct holder. A group whose
 member list was not read whole (no read, an error or vendor error returned as data, @odata.nextLink still set,
 a read that cannot be paired with the group ids, or a group read twice) stays unresolved and the result is not
-evaluated. Only ACTIVE role assignments are read (roleAssignments); PIM-eligible assignments are not in this read.
+evaluated. roleAssignments holds ACTIVE assignments only; PIM-eligible assignments are read when the workflow merges
+roleEligibilityScheduleInstances (see INPUT), and are judged like active ones (a group is expanded the same way).
 
 Names (C4): reasons never echo a user principal name or display name; an account is named by the first 8
 characters of its object id ("user 1a2b3c4d..."), which is enough to find it in Entra.
@@ -55,6 +56,15 @@ from
 
 `directoryRoles` (GET /v1.0/directoryRoles?$expand=members) is accepted as an alternative role source.
 
+PIM-eligible role holders, when the workflow supplies them:
+    "roleEligibilityScheduleInstances": <Graph list body, every page read>
+from GET /v1.0/roleManagement/directory/roleEligibilityScheduleInstances (RoleEligibilitySchedule.Read.Directory or
+RoleManagement.Read.Directory; Entra ID P2). The instances in effect now (startDateTime not in the future, endDateTime
+null or later) that hold a PRIVILEGED_ROLE_IDS role join the population; the result reports activeAdminCount and
+eligibleAdminCount over the enabled privileged users (a holder of both is in both; privilegedUserCount is the
+distinct total). Absent: the verdict is what it was and eligibleAssignmentsRead is false. Present but not read whole
+(an error or vendor error returned as data, @odata.nextLink still set): not evaluated, like a truncated read.
+
 Role-assignable groups (WI-3b), when the workflow supplies them:
     "roleGroups":       {"groupIds": [{"id": ...}, ...]}  (GET /v1.0/groups?$filter=isAssignableToRole eq true
                         &$select=id; only role-assignable groups can hold an Entra role)
@@ -69,14 +79,15 @@ permission and no tenant re-consent.
 
 FAIL CLOSED. An empty, null, unrecognised or error body (PSError, Graph {"error": {...}}, an HTTP
 4xx/5xx envelope, an IS error status), a read with no enabled privileged user (every tenant has a
-Global Administrator), a truncated read (@odata.nextLink), a role holder that cannot be resolved, or a
+Global Administrator), a truncated read (@odata.nextLink, on any read including the PIM eligibility read), a role
+holder that cannot be resolved, or a
 user read that does not carry onPremisesSyncEnabled returns arePrivilegedAccountsCloudOnly = None with
 a dataCollection error, so the check reads "not evaluated", never pass or fail. A privileged account
 shown to be synced is a measured fail, whatever else is missing.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 # ============================================================================
@@ -392,6 +403,135 @@ def privileged_principals(assignments, directory_roles):
     return found
 
 
+# ----------------------------------------------------------------------------- PIM-eligible role holders
+# A tenant that uses Privileged Identity Management (PIM) holds admin roles as ELIGIBLE assignments, which
+# GET /roleManagement/directory/roleAssignments (ACTIVE assignments only) does not return. When the workflow also
+# merges GET /v1.0/roleManagement/directory/roleEligibilityScheduleInstances (every page read) under ELIGIBLE_KEY,
+# its principals join the admin population (RoleEligibilitySchedule.Read.Directory or RoleManagement.Read.Directory;
+# Entra ID P2 for PIM). Key absent (workflow not updated, or no P2): behaviour is unchanged and the output says
+# eligibleAssignmentsRead false. Key present but not read whole (an error or vendor error returned as data, an
+# @odata.nextLink still set, a truncation marker, a body that is not a list): the admin population is incomplete.
+ELIGIBLE_KEY = "roleEligibilityScheduleInstances"
+ELIGIBLE_ENDPOINT = "GET /v1.0/roleManagement/directory/roleEligibilityScheduleInstances"
+ELIGIBLE_WRAPPERS = ["api_response", "apiResponse", "response", "result", "Output", "rawResponse", "data"]
+ELIGIBLE_NOT_READ = ("PIM-eligible role assignments were not read (no " + ELIGIBLE_KEY + " in the input), so "
+                     "administrators who hold a privileged role only through PIM eligibility are not in this result")
+
+
+def eligibility_time(value):
+    """A UTC datetime from Graph's ISO 8601 text ('2026-01-01T00:00:00Z', optional fraction), else None."""
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if len(raw) < 19 or raw[10] not in ("T", "t", " "):
+        return None
+    tail = raw[19:]
+    if tail.startswith("."):
+        index = 1
+        while index < len(tail) and tail[index].isdigit():
+            index = index + 1
+        tail = tail[index:]
+    if tail not in ("", "Z", "z", "+00:00"):
+        return None
+    try:
+        return datetime.fromisoformat(raw[:10] + "T" + raw[11:19]).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def eligibility_in_effect(row, now):
+    """False only for an instance shown to have ended (endDateTime at or before now) or not yet begun. An unreadable
+    or missing date keeps the instance in, so data that cannot be read never narrows the admin population."""
+    start = eligibility_time(row.get("startDateTime"))
+    end = eligibility_time(row.get("endDateTime"))
+    if start is not None and start > now:
+        return False
+    if end is not None and end <= now:
+        return False
+    return True
+
+
+def eligibility_page_problem(page):
+    """Why one page of the eligibility read is not evidence, '' when it is."""
+    if not isinstance(page, dict):
+        return "the body is not an object"
+    if "vendorErrorAsResponse" in page:
+        return "Microsoft Graph refused the read (vendor error returned as data)"
+    if page.get("error") or "PSError" in page:
+        return "Microsoft Graph returned an error"
+    for k in ("statusCode", "status_code"):
+        code = page.get(k)
+        if isinstance(code, str) and code.strip().isdigit():
+            code = int(code.strip())
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return "Microsoft Graph answered HTTP " + str(code)
+    if str(page.get("status") or "").strip().lower() in ("error", "failure", "failed", "not available"):
+        return "the read reported an error status"
+    if not isinstance(page.get("value"), list):
+        return "the body carries no value list"
+    if str(page.get("@odata.nextLink") or "").strip() not in ("", "None", "null"):
+        return "only part of it was read (@odata.nextLink remains)"
+    for k in ("paginationTruncated", "truncated"):
+        if str(page.get(k)).strip().lower() in ("true", "1"):
+            return "only part of it was read (" + k + " is set)"
+    for row in page.get("value"):
+        if not isinstance(row, dict) or not str(row.get("principalId") or "").strip():
+            return "an instance is not an object with a principalId"
+    return ""
+
+
+def eligibility_rows(data, now):
+    """(rows, problem, ended) for the PIM eligibility read.
+    Absent: (None, '', 0). Present but not read whole: (None, problem, 0). Read whole: the instances in effect at
+    `now`, and how many were left out because they had ended or not yet begun."""
+    if not isinstance(data, dict) or ELIGIBLE_KEY not in data:
+        return None, "", 0
+    body = data.get(ELIGIBLE_KEY)
+    for attempt in range(4):
+        if not isinstance(body, dict) or "value" in body:
+            break
+        moved = False
+        for k in ELIGIBLE_WRAPPERS:
+            if isinstance(body.get(k), (dict, list)):
+                body = body[k]
+                moved = True
+                break
+        if not moved:
+            break
+    if isinstance(body, list) and len(body) > 0 and all(
+            isinstance(p, dict) and ("value" in p or "error" in p or "vendorErrorAsResponse" in p) for p in body):
+        pages = body
+    elif isinstance(body, list):
+        pages = [{"value": body}]
+    else:
+        pages = [body]
+    rows = []
+    ended = 0
+    for page in pages:
+        problem = eligibility_page_problem(page)
+        if problem:
+            return None, "the PIM role eligibility read (" + ELIGIBLE_ENDPOINT + ") is incomplete: " + problem, 0
+        for row in page.get("value"):
+            if eligibility_in_effect(row, now):
+                rows.append(row)
+            else:
+                ended = ended + 1
+    return rows, "", ended
+
+
+def eligible_principals(rows):
+    """Map principal id -> kind for the PIM-eligible instances (in effect now) of privileged roles."""
+    found = {}
+    for row in rows or []:
+        if lower_id(row.get("roleDefinitionId") or row.get("roleTemplateId")) not in PRIVILEGED_ROLE_IDS:
+            continue
+        principal = row.get("principal") if isinstance(row.get("principal"), dict) else {}
+        pid = lower_id(row.get("principalId") or principal.get("id"))
+        if pid:
+            found[pid] = odata_kind(principal) or found.get(pid, "")
+    return found
+
+
 def role_group_members(data):
     """{lower-case group id: member rows read whole, or None} from roleGroups/roleGroupMembers paired by position.
     {} when the reads are absent or cannot be paired."""
@@ -422,9 +562,10 @@ def role_group_members(data):
     return out
 
 
-def expand_groups(principals, data):
+def expand_groups(principals, data, origins=None):
     """Replace each group principal whose transitive members were read whole by its members (kind 'expanded' marks
-    the group itself resolved). Returns how many principals were added through a group."""
+    the group itself resolved). Returns how many principals were added through a group. `origins` (principal id ->
+    {"active": bool, "eligible": bool}) passes a group's active/eligible origin on to its members."""
     expanded = role_group_members(data)
     added = 0
     for gid in sorted([p for p in principals if principals[p] == "group"]):
@@ -435,7 +576,14 @@ def expand_groups(principals, data):
         for member in rows:
             mid = lower_id(member.get("id"))
             kind = odata_kind(member)
-            if kind == "group" or mid in principals:
+            if kind == "group":
+                continue
+            if origins is not None and gid in origins:
+                mark = origins.get(mid) or {"active": False, "eligible": False}
+                mark["active"] = mark["active"] or origins[gid]["active"]
+                mark["eligible"] = mark["eligible"] or origins[gid]["eligible"]
+                origins[mid] = mark
+            if mid in principals:
                 continue
             principals[mid] = kind
             added = added + 1
@@ -492,9 +640,25 @@ def transform(input):
                 users_by_id[lower_id(user.get("id"))] = user
 
         principals = privileged_principals(assignments, directory_roles)
-        through_groups = expand_groups(principals, data)
+        origins = {}
+        for pid in principals:
+            origins[pid] = {"active": True, "eligible": False}
+        eligible_rows, eligible_problem, eligible_ended = eligibility_rows(data, datetime.now(timezone.utc))
+        eligible_read = eligible_rows is not None
+        eligible = eligible_principals(eligible_rows)
+        for pid in eligible:
+            if pid not in principals or not principals[pid]:
+                principals[pid] = eligible[pid]
+            mark = origins.get(pid) or {"active": False, "eligible": False}
+            mark["eligible"] = True
+            origins[pid] = mark
+        if eligible_problem:
+            api_errors.append(eligible_problem)
+        through_groups = expand_groups(principals, data, origins)
 
         privileged_users = 0
+        active_users = 0
+        eligible_users = 0
         disabled = 0
         service_principals = 0
         unresolved = []
@@ -527,6 +691,11 @@ def transform(input):
             if not is_enabled(user):
                 disabled = disabled + 1
                 continue
+            origin = origins.get(pid) or {"active": False, "eligible": False}
+            if origin["active"]:
+                active_users = active_users + 1
+            if origin["eligible"]:
+                eligible_users = eligible_users + 1
             name = account_ref(pid)
             state = sync_state(user)
             if state == "synced":
@@ -545,6 +714,9 @@ def transform(input):
             "privilegedUserCount": enabled_users,
             "syncedPrivilegedAccounts": len(synced),
             "unresolvedPrivilegedPrincipals": len(unresolved),
+            "activeAdminCount": active_users,
+            "eligibleAdminCount": eligible_users if eligible_read else None,
+            "eligibleAssignmentsRead": eligible_read,
         }
         summary = {
             "privilegedPrincipals": len([p for p in principals if principals[p] != "expanded"]),
@@ -557,8 +729,14 @@ def transform(input):
             "syncStateUnknown": len(unknown_state),
             "untypedPrincipalsNotInUserRead": len(untyped),
             "truncated": truncated,
+            "activeAdminUsers": active_users,
+            "eligibleAdminUsers": eligible_users if eligible_read else None,
+            "eligibleAssignmentsRead": eligible_read,
+            "eligibleInstancesNotInEffect": eligible_ended,
         }
         findings = []
+        if not eligible_read and not eligible_problem:
+            findings.append(ELIGIBLE_NOT_READ)
         if service_principals > 0:
             findings.append(f"{service_principals} privileged role holder(s) are service principals (not judged)")
         if disabled > 0:
@@ -603,8 +781,9 @@ def transform(input):
                               f"privileged account(s) (it is returned only on $select): "
                               + "; ".join(unknown_state[:MAX_NAMED]))
         if enabled_users == 0 and not unresolved:
-            incomplete.append("no enabled user holds a privileged directory role; every tenant has a Global "
-                              "Administrator, so the read is incomplete")
+            incomplete.append("no enabled user holds a privileged directory role" + (
+                ", active or PIM-eligible" if eligible_read else " (PIM-eligible assignments were not read)")
+                + "; every tenant has a Global Administrator, so the read is incomplete")
 
         extra_recommendations = []
         if untyped:

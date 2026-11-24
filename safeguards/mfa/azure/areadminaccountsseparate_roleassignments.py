@@ -14,6 +14,15 @@ Data source: IS workflow areAdminAccountsSeparate on Azure AD (One-Click) cde891
   users            GET https://graph.microsoft.com/v1.0/users?$select=id,userPrincipalName,mail,accountEnabled,assignedLicenses&$top=999
                    https://learn.microsoft.com/en-us/graph/api/user-list (User.Read.All)
 Input: {"roleAssignments": {"value": [...]}, "users": {"value": [...]}} (each may also arrive unwrapped).
+Optional third read, PIM-eligible role holders (roleAssignments holds ACTIVE assignments only):
+  roleEligibilityScheduleInstances
+                   GET https://graph.microsoft.com/v1.0/roleManagement/directory/roleEligibilityScheduleInstances
+                   https://learn.microsoft.com/en-us/graph/api/rbacapplication-list-roleeligibilityscheduleinstances
+                   (every page read; a Graph body, a bare list or a list of pages). The instances in effect now
+                   (startDateTime not in the future, endDateTime null or later) are judged exactly like active
+                   assignments: a privileged user joins the admin population, a group holder is unevaluated.
+                   Absent: the verdict is what it was and eligibleAssignmentsRead is false. Present but not read
+                   whole (error or vendor error as data, @odata.nextLink): unevaluated, like a paged active feed.
 
 Privileged roles are Entra built-in role TEMPLATE ids (identical in every tenant), per
 https://learn.microsoft.com/en-us/entra/identity/role-based-access-control/permissions-reference .
@@ -25,10 +34,11 @@ Verdict:
   False  at least one privileged human admin has a mail address or an Exchange-bearing licence.
   None   (Unevaluated, dataCollection error) a missing or error feed, a paged feed (@odata.nextLink present:
          only the first page was read), a role held by a group (members not read), a privileged user absent
-         from the complete user feed, or no human privileged admin at all.
+         from the complete user feed, or no human privileged admin at all (active or, when read, PIM-eligible).
+Names (C4): reasons name an account by the first 8 characters of its object id, never its UPN.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 KEY = "areAdminAccountsSeparate"
 
@@ -80,7 +90,7 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None, recommendations=None,
-                    input_summary=None, api_errors=None, transformation_errors=None):
+                    input_summary=None, api_errors=None, transformation_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -92,7 +102,8 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "transformation": {"status": "error" if (transformation_errors or []) else "success",
                                "errors": transformation_errors or [], "inputSummary": input_summary or {}},
             "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [],
-                           "recommendations": recommendations or [], "additionalFindings": []},
+                           "recommendations": recommendations or [],
+                           "additionalFindings": additional_findings or []},
             "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0",
                          "transformationId": "areAdminAccountsSeparate_roleassignments",
                          "vendor": "Microsoft", "category": "Identity"},
@@ -119,6 +130,127 @@ def graph_list(feed, name):
     if feed.get("@odata.nextLink"):
         return None, "The " + name + " feed is paged and only its first page was read; not evaluated."
     return records, None
+
+
+# ----------------------------------------------------------------------------- PIM-eligible role holders
+# A tenant that uses Privileged Identity Management (PIM) holds admin roles as ELIGIBLE assignments, which
+# GET /roleManagement/directory/roleAssignments (ACTIVE assignments only) does not return. When the workflow also
+# merges GET /v1.0/roleManagement/directory/roleEligibilityScheduleInstances (every page read) under ELIGIBLE_KEY,
+# its principals join the admin population (RoleEligibilitySchedule.Read.Directory or RoleManagement.Read.Directory;
+# Entra ID P2 for PIM). Key absent (workflow not updated, or no P2): behaviour is unchanged and the output says
+# eligibleAssignmentsRead false. Key present but not read whole (an error or vendor error returned as data, an
+# @odata.nextLink still set, a truncation marker, a body that is not a list): the admin population is incomplete.
+ELIGIBLE_KEY = "roleEligibilityScheduleInstances"
+ELIGIBLE_ENDPOINT = "GET /v1.0/roleManagement/directory/roleEligibilityScheduleInstances"
+ELIGIBLE_WRAPPERS = ["api_response", "apiResponse", "response", "result", "Output", "rawResponse", "data"]
+ELIGIBLE_NOT_READ = ("PIM-eligible role assignments were not read (no " + ELIGIBLE_KEY + " in the input), so "
+                     "administrators who hold a privileged role only through PIM eligibility are not in this result")
+
+
+def eligibility_time(value):
+    """A UTC datetime from Graph's ISO 8601 text ('2026-01-01T00:00:00Z', optional fraction), else None."""
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if len(raw) < 19 or raw[10] not in ("T", "t", " "):
+        return None
+    tail = raw[19:]
+    if tail.startswith("."):
+        index = 1
+        while index < len(tail) and tail[index].isdigit():
+            index = index + 1
+        tail = tail[index:]
+    if tail not in ("", "Z", "z", "+00:00"):
+        return None
+    try:
+        return datetime.fromisoformat(raw[:10] + "T" + raw[11:19]).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def eligibility_in_effect(row, now):
+    """False only for an instance shown to have ended (endDateTime at or before now) or not yet begun. An unreadable
+    or missing date keeps the instance in, so data that cannot be read never narrows the admin population."""
+    start = eligibility_time(row.get("startDateTime"))
+    end = eligibility_time(row.get("endDateTime"))
+    if start is not None and start > now:
+        return False
+    if end is not None and end <= now:
+        return False
+    return True
+
+
+def eligibility_page_problem(page):
+    """Why one page of the eligibility read is not evidence, '' when it is."""
+    if not isinstance(page, dict):
+        return "the body is not an object"
+    if "vendorErrorAsResponse" in page:
+        return "Microsoft Graph refused the read (vendor error returned as data)"
+    if page.get("error") or "PSError" in page:
+        return "Microsoft Graph returned an error"
+    for k in ("statusCode", "status_code"):
+        code = page.get(k)
+        if isinstance(code, str) and code.strip().isdigit():
+            code = int(code.strip())
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return "Microsoft Graph answered HTTP " + str(code)
+    if str(page.get("status") or "").strip().lower() in ("error", "failure", "failed", "not available"):
+        return "the read reported an error status"
+    if not isinstance(page.get("value"), list):
+        return "the body carries no value list"
+    if str(page.get("@odata.nextLink") or "").strip() not in ("", "None", "null"):
+        return "only part of it was read (@odata.nextLink remains)"
+    for k in ("paginationTruncated", "truncated"):
+        if str(page.get(k)).strip().lower() in ("true", "1"):
+            return "only part of it was read (" + k + " is set)"
+    for row in page.get("value"):
+        if not isinstance(row, dict) or not str(row.get("principalId") or "").strip():
+            return "an instance is not an object with a principalId"
+    return ""
+
+
+def eligibility_rows(data, now):
+    """(rows, problem, ended) for the PIM eligibility read.
+    Absent: (None, '', 0). Present but not read whole: (None, problem, 0). Read whole: the instances in effect at
+    `now`, and how many were left out because they had ended or not yet begun."""
+    if not isinstance(data, dict) or ELIGIBLE_KEY not in data:
+        return None, "", 0
+    body = data.get(ELIGIBLE_KEY)
+    for attempt in range(4):
+        if not isinstance(body, dict) or "value" in body:
+            break
+        moved = False
+        for k in ELIGIBLE_WRAPPERS:
+            if isinstance(body.get(k), (dict, list)):
+                body = body[k]
+                moved = True
+                break
+        if not moved:
+            break
+    if isinstance(body, list) and len(body) > 0 and all(
+            isinstance(p, dict) and ("value" in p or "error" in p or "vendorErrorAsResponse" in p) for p in body):
+        pages = body
+    elif isinstance(body, list):
+        pages = [{"value": body}]
+    else:
+        pages = [body]
+    rows = []
+    ended = 0
+    for page in pages:
+        problem = eligibility_page_problem(page)
+        if problem:
+            return None, "the PIM role eligibility read (" + ELIGIBLE_ENDPOINT + ") is incomplete: " + problem, 0
+        for row in page.get("value"):
+            if eligibility_in_effect(row, now):
+                rows.append(row)
+            else:
+                ended = ended + 1
+    return rows, "", ended
+
+
+def account_ref(pid):
+    """A partial object id for reasons: enough to find the account in Entra, no personal data (C4)."""
+    return "user " + str(pid)[:8] + "..."
 
 
 def principal_type(assignment):
@@ -167,11 +299,19 @@ def transform(input):
             if isinstance(u.get("id"), str):
                 users_by_id[u["id"]] = u
 
+        eligible, problem, eligible_ended = eligibility_rows(data, datetime.now(timezone.utc))
+        if problem:
+            return unevaluated(problem, validation)
+        eligible_read = eligible is not None
+
         admin_user_ids = []
+        active_ids = []
+        eligible_ids = []
         sp_holders = 0
         group_holders = 0
         unknown_holders = 0
-        for a in assignments:
+        tagged = [(a, active_ids) for a in assignments] + [(e, eligible_ids) for e in (eligible or [])]
+        for a, kind_ids in tagged:
             if a.get("roleDefinitionId") not in PRIVILEGED_ROLE_IDS:
                 continue
             pid = a.get("principalId")
@@ -183,11 +323,17 @@ def transform(input):
             elif ptype.endswith("user") or (ptype == "" and pid in users_by_id):
                 if pid not in admin_user_ids:
                     admin_user_ids.append(pid)
+                if pid not in kind_ids:
+                    kind_ids.append(pid)
             else:
                 unknown_holders = unknown_holders + 1
 
         summary = {"privilegedUserAdmins": len(admin_user_ids), "privilegedServicePrincipals": sp_holders,
-                   "privilegedGroups": group_holders, "userCount": len(users)}
+                   "privilegedGroups": group_holders, "userCount": len(users),
+                   "activeAdminUsers": len(active_ids),
+                   "eligibleAdminUsers": len(eligible_ids) if eligible_read else None,
+                   "eligibleAssignmentsRead": eligible_read, "eligibleInstancesNotInEffect": eligible_ended}
+        findings = [] if eligible_read else [ELIGIBLE_NOT_READ]
         if group_holders:
             return unevaluated(str(group_holders) + " privileged role assignment(s) are held by groups whose members "
                                "were not read; admin separation cannot be confirmed.", validation, summary)
@@ -199,16 +345,20 @@ def transform(input):
             return unevaluated(str(len(missing)) + " privileged user(s) are absent from the user feed; not evaluated.",
                                validation, summary)
         if not admin_user_ids:
-            return unevaluated("No user holds a privileged directory role; there is no admin account to judge.",
-                               validation, summary)
+            return unevaluated("No user holds a privileged directory role" + (
+                ", active or PIM-eligible" if eligible_read else " (PIM-eligible assignments were not read)")
+                + "; there is no admin account to judge.", validation, summary)
 
         with_mail = []
         for pid in admin_user_ids:
             u = users_by_id[pid]
             if has_mailbox(u):
-                with_mail.append(u.get("userPrincipalName") or pid)
+                with_mail.append(account_ref(pid))  # C4: no user principal name in a reason
         summary["adminsWithMailbox"] = len(with_mail)
-        result = {KEY: len(with_mail) == 0, "adminCount": len(admin_user_ids), "adminsWithMailbox": len(with_mail)}
+        result = {KEY: len(with_mail) == 0, "adminCount": len(admin_user_ids), "adminsWithMailbox": len(with_mail),
+                  "activeAdminCount": len(active_ids),
+                  "eligibleAdminCount": len(eligible_ids) if eligible_read else None,
+                  "eligibleAssignmentsRead": eligible_read}
         if with_mail:
             return create_response(
                 result=result, validation=validation,
@@ -216,12 +366,12 @@ def transform(input):
                               "have a mailbox (mail address or Exchange licence): " + ", ".join(with_mail[:10])],
                 recommendations=["Give each administrator a separate, unlicensed admin-only account and remove "
                                  "privileged roles from everyday mail-enabled accounts"],
-                input_summary=summary)
+                input_summary=summary, additional_findings=findings)
         return create_response(
             result=result, validation=validation,
             pass_reasons=["All " + str(len(admin_user_ids)) + " privileged admin account(s) are mailbox-free "
                           "dedicated admin identities"],
-            input_summary=summary)
+            input_summary=summary, additional_findings=findings)
     except Exception as e:
         return create_response(result={KEY: None}, transformation_errors=[str(e)],
                                api_errors=["Transformation error: " + str(e)],

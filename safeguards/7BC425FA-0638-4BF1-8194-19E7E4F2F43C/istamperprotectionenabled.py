@@ -12,6 +12,12 @@ Permission: AdvancedQuery.Read.All
 Response contains Results[] with IsCompliant (bool) per device.
 scid-2010 is "Turn on Microsoft Defender Antivirus", NOT tamper protection (that is scid-2003); this file
 counts whatever rows its method returns, so the method query decides what is measured.
+
+A tamper state that cannot be read -- IsCompliant / isTamperProtected null, "None" or missing, no row that
+carries one, an empty result, an error body -- is Not evaluated (None, dataCollection status "error", with
+the reason), never False: it shows nothing about whether tamper protection is on. Rows with an unreadable
+state are left out and counted (unreadableDevices); a readable compliant row still passes and a body whose
+readable rows are all non-compliant still fails.
 """
 import json
 from datetime import datetime
@@ -61,6 +67,21 @@ def to_bool(val):
     return bool(val)
 
 
+def read_flag(val):
+    """True / False from a boolean-ish tamper state, or None when the state is unreadable (null, "None", other)."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return True if val == 1 else (False if val == 0 else None)
+    if isinstance(val, str):
+        text = val.strip().lower()
+        if text in ("true", "1", "yes"):
+            return True
+        if text in ("false", "0", "no"):
+            return False
+    return None
+
+
 def extract_devices(data):
     """Extract device records from Advanced Hunting or legacy response formats.
 
@@ -90,58 +111,64 @@ def evaluate(data):
     Supports two response formats:
     1. Advanced Hunting (scid-2003): IsCompliant field per device
     2. Legacy machines API: isTamperProtected field per device
+
+    {"isTamperProtectionEnabled": None, "error": reason} when no device's tamper state can be read.
     """
-    try:
-        devices = extract_devices(data)
+    devices = extract_devices(data)
+    if not devices:
+        return {"isTamperProtectionEnabled": None,
+                "error": "The response lists no device, so tamper protection cannot be read"}
 
-        if not devices:
-            return {"isTamperProtectionEnabled": False, "error": "No devices found"}
+    total = 0
+    protected = 0
+    unreadable = 0
+    non_compliant_devices = []
 
-        total = 0
-        protected = 0
-        non_compliant_devices = []
+    for device in devices:
+        if not isinstance(device, dict):
+            continue
 
-        for device in devices:
-            if not isinstance(device, dict):
+        device_name = device.get("DeviceName") or device.get("computerDnsName") or "Unknown"
+
+        # Advanced Hunting format (scid-2003): IsCompliant
+        if "IsCompliant" in device:
+            is_applicable = to_bool(device.get("IsApplicable", True))
+            if not is_applicable:
                 continue
+            state = read_flag(device.get("IsCompliant"))
+        # Legacy machines API format: isTamperProtected
+        elif "isTamperProtected" in device:
+            state = read_flag(device.get("isTamperProtected"))
+        else:
+            # Device record without tamper protection info -- skip
+            continue
+        if state is None:
+            unreadable += 1
+            continue
+        total += 1
+        if state:
+            protected += 1
+        else:
+            non_compliant_devices.append(device_name)
 
-            device_name = device.get("DeviceName") or device.get("computerDnsName") or "Unknown"
+    if total == 0:
+        if unreadable:
+            reason = (str(unreadable) + " applicable device(s) report no readable tamper protection state "
+                      "(null or missing), so tamper protection cannot be read")
+        else:
+            reason = "No applicable device carries tamper protection data, so tamper protection cannot be read"
+        return {"isTamperProtectionEnabled": None, "unreadableDevices": unreadable, "error": reason}
 
-            # Advanced Hunting format (scid-2003): IsCompliant
-            if "IsCompliant" in device:
-                is_applicable = to_bool(device.get("IsApplicable", True))
-                if not is_applicable:
-                    continue
-                total += 1
-                if to_bool(device.get("IsCompliant", False)):
-                    protected += 1
-                else:
-                    non_compliant_devices.append(device_name)
-            # Legacy machines API format: isTamperProtected
-            elif "isTamperProtected" in device:
-                total += 1
-                if to_bool(device.get("isTamperProtected", False)):
-                    protected += 1
-                else:
-                    non_compliant_devices.append(device_name)
-            else:
-                # Device record without tamper protection info — skip
-                continue
+    percentage = round((protected / total) * 100, 2)
 
-        if total == 0:
-            return {"isTamperProtectionEnabled": False, "error": "No applicable devices found with tamper protection data"}
-
-        percentage = round((protected / total) * 100, 2)
-
-        return {
-            "isTamperProtectionEnabled": protected > 0,
-            "scoreInPercentage": percentage,
-            "totalDevices": total,
-            "tamperProtectedCount": protected,
-            "nonCompliantDevices": non_compliant_devices[:20]
-        }
-    except Exception as e:
-        return {"isTamperProtectionEnabled": False, "error": str(e)}
+    return {
+        "isTamperProtectionEnabled": protected > 0,
+        "scoreInPercentage": percentage,
+        "totalDevices": total,
+        "tamperProtectedCount": protected,
+        "unreadableDevices": unreadable,
+        "nonCompliantDevices": non_compliant_devices[:20]
+    }
 
 
 #: The id the method used to query by mistake, and what it really measures. Its rows are not evidence for this
@@ -189,8 +216,18 @@ def transform(input):
             )
 
         eval_result = evaluate(data)
-        result_value = eval_result.get(criteriaKey, False)
+        result_value = eval_result.get(criteriaKey)
         extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
+
+        if result_value is None:
+            reason = eval_result.get("error") or "Tamper protection state could not be read"
+            return create_response(
+                result={criteriaKey: None, **extra_fields},
+                validation=validation,
+                fail_reasons=[reason],
+                api_errors=[reason],
+                input_summary={criteriaKey: None, **extra_fields},
+            )
 
         pass_reasons = []
         fail_reasons = []
@@ -215,9 +252,11 @@ def transform(input):
             input_summary={criteriaKey: result_value, **extra_fields}
         )
     except Exception as e:
+        reason = f"Transformation error: {str(e)}"
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=[reason],
+            api_errors=[reason]
         )

@@ -85,3 +85,55 @@ def test_legacy_guard_refuses_hunting_rows_without_an_id():
     r = row("scid-2003", 1)
     del r["ConfigurationId"]
     assert tamper(hunting([r]))["transformedResponse"]["isTamperProtectionEnabled"] is None
+
+
+# ---- an unreadable tamper state is Not evaluated, never a fail
+
+def not_evaluated(out, key):
+    assert out["transformedResponse"][key] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+    assert out["additionalInfo"]["dataCollection"]["errors"]
+
+
+def test_oneclick_null_tamper_state_is_not_evaluated():
+    for state in (None, "None", ""):
+        out = load()(hunting([row("scid-2003", state), row("scid-2003", 1, device="d2")]))
+        not_evaluated(out, "isTamperProtectionEnabled")
+        assert out["transformedResponse"]["tamperProtectionUnreadableDevices"] == 1
+    r = row("scid-2003", 1)
+    del r["IsCompliant"]
+    not_evaluated(load()(hunting([r])), "isTamperProtectionEnabled")
+
+
+def test_oneclick_readable_non_compliant_still_fails_beside_a_null():
+    out = load()(hunting([row("scid-2003", None), row("scid-2003", 0, device="d2"), row("scid-2003", 1, device="d3")]))
+    assert out["transformedResponse"]["isTamperProtectionEnabled"] is False
+    assert out["transformedResponse"]["tamperProtectionCompliancePercentage"] == 50
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+
+
+def test_legacy_null_tamper_state_is_not_evaluated():
+    tamper = load_legacy("istamperprotectionenabled")
+    not_evaluated(tamper(hunting([row("scid-2003", None)])), "isTamperProtectionEnabled")
+    not_evaluated(tamper(hunting([row("scid-2003", "None"), row("scid-2003", None, device="d2")])),
+                  "isTamperProtectionEnabled")
+    not_evaluated(tamper({"value": [{"computerDnsName": "host-a", "isTamperProtected": None}]}),
+                  "isTamperProtectionEnabled")
+    not_evaluated(tamper({"value": [{"computerDnsName": "host-a"}]}), "isTamperProtectionEnabled")
+
+
+def test_legacy_empty_or_error_body_is_not_evaluated():
+    tamper = load_legacy("istamperprotectionenabled")
+    for body in ({}, hunting([]), {"value": []}, {"error": {"code": "Forbidden", "message": "denied"}}, "not json"):
+        not_evaluated(tamper(body), "isTamperProtectionEnabled")
+
+
+def test_legacy_readable_states_still_decide():
+    tamper = load_legacy("istamperprotectionenabled")
+    out = tamper(hunting([row("scid-2003", 0), row("scid-2003", None, device="d2")]))
+    assert out["transformedResponse"]["isTamperProtectionEnabled"] is False
+    assert out["transformedResponse"]["unreadableDevices"] == 1
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+    out = tamper({"value": [{"computerDnsName": "host-a", "isTamperProtected": True},
+                            {"computerDnsName": "host-b", "isTamperProtected": None}]})
+    assert out["transformedResponse"]["isTamperProtectionEnabled"] is True

@@ -40,7 +40,7 @@ MIXED_AGENTS = [agent(1), agent(2, active=False, up_to_date=False, encrypted=Fal
 
 AGENT_CASES = [
     ("isEDRAgentActive", True, True),
-    ("assetInventoryCoveragePercentage", 100.0, 50.0),
+    ("assetInventoryCoveragePercentage", 100.0, 66.67),
     ("agentUpToDatePercentage", 100.0, 66.67),
     ("diskEncryptionCoveragePercentage", 100.0, 66.67),
     ("staleAgentOfflineCount", 0, 2),
@@ -105,3 +105,30 @@ def test_partial_read_is_not_scored(key):
     items = GOOD_AGENTS if key not in THREAT_KEYS else [threat(1)]
     assert value(key, body(items, total=5000)) is None
     assert value(key, body(items, next_cursor="abc")) is None
+
+
+def test_inventory_coverage_counts_installed_agents_that_are_offline():
+    """A run at night: most agents asleep (isActive=false) but installed. Coverage is not about who is online."""
+    key = "assetInventoryCoveragePercentage"
+    night = [agent(i, active=(i < 3)) for i in range(20)]
+    out = load(key)(body(night))
+    assert out["transformedResponse"][key] == 100.0
+    assert out["transformedResponse"]["installedAgents"] == 20
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+
+
+def test_inventory_coverage_falls_for_uninstalled_and_skips_stale():
+    key = "assetInventoryCoveragePercentage"
+    recent = "2999-01-01T00:00:00Z"
+    agents = [agent(1, active=False, last=recent), agent(2, uninstalled=True, last=recent),
+              agent(3, uninstalled=True, last=recent), agent(4, last="2998-01-01T00:00:00Z")]
+    out = load(key)(body(agents))["transformedResponse"]
+    assert out[key] == 33.33
+    assert out["staleAgentCount"] == 1
+
+
+def test_inventory_coverage_all_stale_is_not_measured():
+    key = "assetInventoryCoveragePercentage"
+    out = load(key)(body([agent(1, last="2000-01-01T00:00:00Z"), agent(2, last="2000-01-02T00:00:00Z")]))
+    assert out["transformedResponse"][key] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"

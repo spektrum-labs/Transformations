@@ -4,6 +4,14 @@ Vendor: Microsoft
 Category: Identity / PIM
 
 Evaluates if Privileged Identity Management (PIM) is enabled by checking role eligibility schedules.
+
+Input: the Graph role eligibility read (roleEligibilitySchedules or roleEligibilityScheduleInstances). The read
+may be a single page ($top=1, the original method), the full paged list with every page concatenated, a bare
+list of instances, a list of Graph pages, or a merged body carrying the read under roleEligibilityScheduleInstances
+or roleEligibilitySchedules. scheduleCount is the number of rows read across all pages. When a page still carries
+@odata.nextLink the count is a lower bound (inputSummary.scheduleCountComplete false): at least one schedule still
+shows PIM in use, but a read with no schedule and more pages (or an error marker in a page) is not evaluated
+(dataCollection error). A row counts only when it is an object with an id, principalId or roleDefinitionId.
 """
 
 import json
@@ -66,6 +74,49 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+SCHEDULE_KEYS = ["roleEligibilityScheduleInstances", "roleEligibilitySchedules"]
+
+
+ERROR_MARKERS = ["error", "vendorErrorAsResponse", "PSError"]
+
+
+def schedule_rows(data):
+    """(rows, complete) across every page of the eligibility read. A row is a schedule only when it is an object
+    with an id, principalId or roleDefinitionId; a page or row that is an error marker makes the read incomplete."""
+    if isinstance(data, dict) and "value" not in data:
+        for key in SCHEDULE_KEYS:
+            if key in data:
+                data = data.get(key)
+                break
+    if isinstance(data, dict) and "value" in data:
+        pages = [data]
+    elif isinstance(data, list) and len(data) > 0 and all(isinstance(page, dict) and "value" in page
+                                                          for page in data):
+        pages = data
+    elif isinstance(data, list):
+        pages = [{"value": data}]
+    else:
+        return [], True
+    rows = []
+    complete = True
+    for page in pages:
+        value = page.get("value") or []
+        if not isinstance(value, list):
+            value = [value] if value else []
+        if len([k for k in ERROR_MARKERS if k in page]) > 0:
+            complete = False
+        for row in value:
+            if not isinstance(row, dict):
+                continue
+            if len([k for k in ERROR_MARKERS if k in row]) > 0:
+                complete = False
+            elif row.get("id") or row.get("principalId") or row.get("roleDefinitionId"):
+                rows.append(row)
+        if str(page.get("@odata.nextLink") or "").strip() not in ("", "None", "null"):
+            complete = False
+    return rows, complete
+
+
 def transform(input):
     criteriaKey = "isPrivilegedIdentityManagementEnabled"
 
@@ -77,7 +128,7 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        if not isinstance(data, dict):
+        if not isinstance(data, (dict, list)):
             return create_response(
                 result={criteriaKey: False, "scheduleCount": 0},
                 validation=validation,
@@ -91,7 +142,7 @@ def transform(input):
                 fail_reasons=["Input validation failed"]
             )
 
-        if "error" in data:
+        if isinstance(data, dict) and "error" in data:
             error_info = data.get("error", {})
             inner_error = error_info.get("innerError", {})
             return create_response(
@@ -105,16 +156,26 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        # Mirrored from safeguards/d9b6f27a-2e67-4b55-a09e-0784c5de9abd/isprivilegedidentitymanagementenabled.py
+        # Same file as safeguards/d9b6f27a-2e67-4b55-a09e-0784c5de9abd/isprivilegedidentitymanagementenabled.py
         # Tenants with only permanent role assignments (no eligible/JIT roles) can false-negative here.
-        schedules = data.get("value") or []
-        if not isinstance(schedules, list):
-            schedules = [schedules] if schedules else []
+        schedules, complete = schedule_rows(data)
+
+        if not schedules and not complete:
+            return create_response(
+                result={criteriaKey: False, "scheduleCount": 0},
+                validation=validation,
+                fail_reasons=["The role eligibility read returned no schedule and is incomplete (more pages "
+                              "or an error returned as data)"],
+                api_errors=["The role eligibility read is incomplete: no schedule read and more pages "
+                            "(@odata.nextLink) or an error returned as data"],
+                input_summary={"scheduleCount": 0, "scheduleCountComplete": False}
+            )
 
         is_enabled = len(schedules) > 0
+        count_text = ("at least " if not complete else "") + str(len(schedules))
 
         if is_enabled:
-            pass_reasons.append(f"PIM is enabled with {len(schedules)} role eligibility schedules configured")
+            pass_reasons.append(f"PIM is enabled with {count_text} role eligibility schedules configured")
         else:
             fail_reasons.append("No Privileged Identity Management (PIM) roles configured")
             recommendations.append("Enable Privileged Identity Management in Azure AD")
@@ -125,7 +186,7 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"scheduleCount": len(schedules)}
+            input_summary={"scheduleCount": len(schedules), "scheduleCountComplete": complete}
         )
 
     except Exception as e:

@@ -12,7 +12,12 @@ when it is Onboarded, exactly as the blended figure does. A class with no machin
 partial or failed read gives None for the split. Synthetic machines only.
 """
 import importlib.util
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+# Recent, so the one-click logging window (15 days on the newest lastSeen, dark fleet on the wall clock)
+# judges these machines whenever the suite runs.
+RECENT = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def load(name):
@@ -31,7 +36,7 @@ SPLIT_KEYS = ("edrServerCoveragePercentage", "edrWorkstationCoveragePercentage",
 
 
 def machine(os_platform, status="Onboarded", excluded=False):
-    record = {"onboardingStatus": status, "healthStatus": "Active", "lastSeen": "2026-10-15T00:00:00Z",
+    record = {"onboardingStatus": status, "healthStatus": "Active", "lastSeen": RECENT,
               "isExcluded": excluded}
     if os_platform is not None:
         record["osPlatform"] = os_platform
@@ -130,10 +135,13 @@ def test_oneclick_existing_fields_are_unchanged():
                 "requiredCoveragePercentage": 95, "serverCoveragePercentage": 0, "totalEndpointCount": 20,
                 "totalServerCount": 1, "eligibleDevices": 20, "protectedDevices": 19, "reportingDevices": 19}
     assert {k: result[k] for k in existing} == existing
-    assert set(result) == set(existing) | set(SPLIT_KEYS)
+    logging_counts = ("loggingJudgedDevices", "loggingExcludedStaleDevices", "loggingExcludedInactiveDevices")
+    assert set(result) == set(existing) | set(SPLIT_KEYS) | set(logging_counts)
     assert response["additionalInfo"]["evaluation"]["failReasons"] == [
         "19 of 20 eligible machines are onboarded to Defender for Endpoint (95%)",
         "19 of 19 onboarded machines report an active sensor",
+        "isEPPLoggingEnabled judged 19 onboarded machines, leaving out 0 last seen more than 15 days before "
+        "the newest and 0 dormant (healthStatus Inactive)",
         "1 eligible servers in the inventory (0% onboarded)",
         "isEPPConfigured failed"]
 
