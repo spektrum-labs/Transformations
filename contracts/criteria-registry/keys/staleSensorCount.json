@@ -1,0 +1,41 @@
+{
+  "name": "staleSensorCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of endpoint agents in scope whose last check-in is older than the integration's documented time window, measured from the newest check-in in the same read (agents that look retired or abandoned rather than briefly offline).",
+  "valueType": "integer",
+  "unit": "count",
+  "domain": {
+    "min": 0
+  },
+  "population": "the agents registered to the connected endpoint-protection tenant; every installed agent the read lists",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "A complete, successful read of the tenant's agent population carrying a per-agent last check-in time, from which the count of agents outside the window is taken (0 when none). A response without readable check-in times, an error or refused answer, or a tenant with no installed agents cannot show 0 and is not measured.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/epp/datto-edr/staleSensorCount.py (Datto EDR GET /api/Agents per-agent heartbeat; 15-day window from the newest heartbeat; None when no agent carries a readable heartbeat)",
+    "safeguards/epp/sentinelone/staleSensorCount.py (existing implementation; same 15-day window on lastActiveDate; not reviewed for this entry)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-24",
+      "change": "Registered so the Datto EDR transform can emit it. The other implementations of this name (SentinelOne, NinjaOne, Sophos, Symantec SEP, Trend Vision One) were not reviewed for this entry, so the key stays proposed and V0."
+    }
+  ],
+  "notes": "Pairs with offlineSensorCount: an implementation that reads a per-agent last-seen time should report agents outside its window here and judge offline status only inside the window."
+}
