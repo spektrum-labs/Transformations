@@ -1,0 +1,33 @@
+{
+  "name": "realTimeProtectionCompliancePercentage",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Whole-number percentage (rounded down) of the applicable devices in Defender for Endpoint's secure-configuration assessment for real-time protection (scid-2012) that report it on. It is the share behind isRealTimeProtectionEnabled, so a requirement can set a coverage bar instead of an all-or-nothing boolean.",
+  "valueType": "integer",
+  "unit": "percent",
+  "domain": {"min": 0, "max": 100},
+  "population": "devices the scid-2012 assessment marks applicable (IsApplicable true); not-applicable devices are left out. Windows Defender (classic) keeps applicable devices with an unreadable state in the denominator, never counted as protected.",
+  "polarity": "higher_is_better",
+  "evidenceRequiredForTrue": "Not applicable: a percentage. A value is reported only from scid-2012 rows with at least one applicable device whose state is readable.",
+  "evidenceClass": "measured",
+  "notMeasured": {"value": null, "envelope": "additionalInfo.dataCollection.status == \"error\""},
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": ["Endpoint Security"],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {"srn": "7bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Windows Defender"},
+    {"srn": "02e2e8f9-8579-407f-910d-280db2ed6831", "name": "Windows Defender (One-Click)"}
+  ],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {"level": "V0", "implementations": []},
+  "citations": [
+    "safeguards/7BC425FA-0638-4BF1-8194-19E7E4F2F43C/microsoft_endpoint_scid_compliance.py (One-Click)",
+    "safeguards/7BC425FA-0638-4BF1-8194-19E7E4F2F43C/isrealtimeprotectionenabled.py (Windows Defender classic)",
+    "Azure/Azure-Sentinel hunting query 'Endpoint Agent Health Status Report': scid-2012 RealtimeProtectionWin"
+  ],
+  "changeLog": [
+    {"revision": 1, "date": "2026-11-24", "change": "Registered when the classic Windows Defender check began emitting it; the One-Click check already did (allowlisted, unregistered)."}
+  ],
+  "notes": "Requirements that need fleet coverage of real-time protection should read this key with greaterThanOrEqual and a bar (98 in Spektrum-owned bundles, spec S3) rather than isRealTimeProtectionEnabled, which is all-or-nothing at One-Click and true-on-one-device at classic. One-Click reports None for the whole response while any applicable device is unreadable and no readable device is non-compliant."
+}

@@ -1,0 +1,32 @@
+{
+  "name": "secureModeCoveragePercentage",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Whole-number percentage (rounded down) of an application-control tool's current computers that enforce Application Control in Secure Mode with no active maintenance mode. It is the share behind ThreatLocker isEPPEnabled, so a requirement can set a coverage bar instead of failing a fleet over one machine.",
+  "valueType": "integer",
+  "unit": "percent",
+  "domain": {"min": 0, "max": 100},
+  "population": "computers the tool lists that are not deleted and checked in within 15 days of the newest check-in (endpoint rules 2026-09-29); a read is scored only when it holds every computer the organisation reports (totalRows).",
+  "polarity": "higher_is_better",
+  "evidenceRequiredForTrue": "Not applicable: a percentage. A value is reported only from a complete computer list in which every judged computer carries a mode.",
+  "evidenceClass": "measured",
+  "notMeasured": {"value": null, "envelope": "additionalInfo.dataCollection.status == \"error\""},
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": ["Endpoint Security"],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {"srn": "69b438a1-cb1f-4103-a1fa-83123787bb21", "name": "ThreatLocker-Endpoint Security"}
+  ],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {"level": "V0", "implementations": []},
+  "citations": [
+    "safeguards/epp/threatlocker/secureModeCoveragePercentage.py",
+    "safeguards/epp/threatlocker/isEPPEnabled.py (the boolean it replaces as a coverage bar)",
+    "ThreatLocker PortalAPI Computer: https://threatlocker.kb.help/portalapicomputer/"
+  ],
+  "changeLog": [
+    {"revision": 1, "date": "2026-11-24", "change": "Registered with the ThreatLocker transform, its first implementation (spec S3: percentage thresholds in Spektrum-owned bundles)."}
+  ],
+  "notes": "ThreatLocker isEPPConfigured measures the same thing under a contested key (percentage at some vendors, boolean at others); this name is uncontested and listed to ThreatLocker until another application-control vendor is reviewed."
+}
