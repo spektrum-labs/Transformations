@@ -1,11 +1,14 @@
 """
 Transformation: unprotectedResourcesCount
 Vendor: Rubrik  |  Category: Backup  |  Product: Rubrik Security Cloud (RSC)
-Evaluates: Active objects with no SLA (NoSla) or set to DoNotProtect.
+Evaluates: Active objects with no SLA assigned (NoSla).
 API Source: getSnappableCompliance (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
         https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/snappableConnection/
-Note: Counts NoSla and DoNotProtect: an explicit Do Not Protect is still an unprotected resource.
+Note: Counts NoSla only. An object set to Do Not Protect (effective SLA DoNotProtect) carries an explicit
+      SLA assignment: someone decided it is not to be backed up (a scratch VM, a replica, a test share).
+      Counting it as an unprotected gap failed customers for a deliberate, recorded decision, so it is left
+      out and reported separately as doNotProtectResourcesCount. An object with no SLA at all is a gap.
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
 unrecognised body is None with dataCollection status "error", so Token-Service records it as not
 evaluated rather than as a gap. Never True from missing data.
@@ -222,8 +225,10 @@ def evaluate(input):
     c, validation, failure = snappable_counts(input)
     if failure:
         return failure
-    n = c["noSla"] + c["doNotProtect"]
+    n = c["noSla"]
     summary = {"activeObjects": c["activeObjects"], "noSla": c["noSla"], "doNotProtect": c["doNotProtect"]}
-    return ok(validation, n, str(n) + " of " + str(c["activeObjects"]) + " active objects are unprotected (" + str(c["noSla"]) +
-              " with no SLA, " + str(c["doNotProtect"]) + " set to Do Not Protect).", summary,
-              {"noSlaCount": c["noSla"], "doNotProtectCount": c["doNotProtect"], "activeObjects": c["activeObjects"]})
+    return ok(validation, n, str(n) + " of " + str(c["activeObjects"]) + " active objects are unprotected (no SLA assigned); "
+              + str(c["doNotProtect"]) + " more are explicitly set to Do Not Protect and are reported separately "
+              "(doNotProtectResourcesCount), not counted as unprotected.", summary,
+              {"noSlaCount": c["noSla"], "doNotProtectCount": c["doNotProtect"],
+               "doNotProtectResourcesCount": c["doNotProtect"], "activeObjects": c["activeObjects"]})
