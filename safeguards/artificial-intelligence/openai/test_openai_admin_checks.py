@@ -1,10 +1,21 @@
-"""OpenAI Administration API checks, on the documented response schemas (openai-openapi master).
-No live admin payload yet: each check has a passing body, a flip that must fail, and the
-fail-closed bodies. Prod hands these files the enriched {"data": body, "validation": ...} input
-because they read input.get("data"), so both forms are exercised."""
+"""OpenAI Administration API checks, on the documented response schemas (openai-openapi 2.3.0).
+
+Each check has a passing body, a flip that must fail, and the no-evidence batteries. The two
+halves are asserted separately and deliberately:
+
+  * a FLIP is a measured failure -- the body was read, the posture is wrong -> False;
+  * a no-evidence body measured nothing -> None AND dataCollection.status "error".
+
+Asserting only the value would pass either way, and that is exactly how the hardcoded
+"dataCollection": {"status": "success"} in these files survived until now. Token-Service reads
+the status and nothing else when it decides whether a criterion was evaluated, so a test that
+does not assert the status does not test the thing that matters.
+
+Prod hands these files the enriched {"data": body, "validation": ...} input because they read
+input.get("data"), so both forms are exercised. Synthetic data only.
+"""
 import copy
 import importlib.util
-import json
 import pathlib
 import time
 
@@ -31,6 +42,26 @@ def user(uid, role="reader", scim=True, sa=False):
             "is_service_account": sa, "is_scim_managed": scim}
 
 
+def bare_user(uid, role="reader"):
+    """A user object exactly as OpenAI's published example and Labs' live body carry one.
+
+    is_scim_managed is in the User schema but not in its `required` list, and neither the
+    vendor's example nor a real organization's response includes it.
+    """
+    return {"object": "organization.user", "id": uid, "name": uid, "email": uid + "@example.invalid",
+            "role": role, "added_at": NOW}
+
+
+def group(gid, scim=False, spelling="is_scim_managed"):
+    """A GroupResponse as GET /v1/organization/groups returns it.
+
+    is_scim_managed and group_type are both in that schema's `required` list.
+    """
+    g = {"id": gid, "name": gid, "created_at": NOW - 30 * DAY, "group_type": "group"}
+    g[spelling] = scim
+    return g
+
+
 def admin_key(kid, expires=True, used=1):
     return {"object": "organization.admin_api_key", "id": kid, "name": kid, "created_at": NOW - 30 * DAY,
             "expires_at": NOW + 300 * DAY if expires else None, "last_used_at": NOW - used * DAY, "owner": {"type": "user"}}
@@ -52,6 +83,25 @@ def flip(base, fn):
     return p
 
 
+class Poisoned(dict):
+    """A non-empty object whose every read raises, to drive transform()'s own except path.
+
+    A battery of bodies, however broad, cannot reach a branch that only the transform's own
+    failure enters. This is a different instrument, not a different body.
+    """
+
+    def __init__(self):
+        super().__init__(poisoned=True)
+
+    def boom(self, *args, **kwargs):
+        raise RuntimeError("poisoned read")
+
+    get = __getitem__ = __contains__ = keys = items = values = __iter__ = boom
+
+    def __len__(self):
+        return 1
+
+
 USERS = lst([user("u1", "owner"), user("u2", "owner", scim=False)] + [user("r%d" % i) for i in range(6)])
 ADMIN = lst([admin_key("a1"), admin_key("a2")])
 CRED = dict(lst([project("p1"), project("p2")]), adminApiKeys=ADMIN,
@@ -63,7 +113,7 @@ SPEND = {"object": "organization.spend_limit", "threshold_amount": 100000, "curr
 
 CASES = [
     ("isactivityaudittrailenabled", "isActivityAuditTrailEnabled",
-     lst([{"id": "audit_log-1", "type": "login.succeeded", "effective_at": NOW - DAY}]), lst([{"note": "not an event"}])),
+     lst([{"id": "audit_log-1", "type": "login.succeeded", "effective_at": NOW - DAY}]), lst([])),
     ("isprivilegedaccesslimited", "isPrivilegedAccessLimited", USERS,
      flip(USERS, lambda p: p["data"][2].update(role="owner"))),
     ("isscimprovisioningenabled", "isSCIMProvisioningEnabled", USERS,
@@ -80,21 +130,30 @@ CASES = [
      flip(SPEND, lambda p: p["enforcement"].update(status="inactive"))),
 ]
 
-BAD = [{}, None, "{}", {"error": True, "status": "Error", "statusCode": 403, "message": "forbidden"},
-       {"error": {"message": "Incorrect API key provided", "code": "invalid_api_key"}}, [{"id": "x"}]]
+# Three distinct routes to a non-answer, because a replay of one proves nothing about the
+# others: a vendor refusal envelope, a body with nothing in it, and the transform's own crash.
+NO_EVIDENCE = [
+    ("empty_dict", lambda: {}),
+    ("none", lambda: None),
+    ("empty_json_string", lambda: "{}"),
+    ("refusal_403_relay", lambda: {"error": True, "status": "Error", "statusCode": 403, "message": "forbidden"}),
+    ("refusal_vendor_401", lambda: {"error": {"message": "Incorrect API key provided", "code": "invalid_api_key"}}),
+    ("bare_list", lambda: [{"id": "x"}]),
+    ("poisoned", Poisoned),
+]
 
 
 def enriched(body):
     return {"data": body, "validation": {"status": "unknown", "errors": [], "warnings": []}}
 
 
-# The audit-trail check has no readable "off" in the API: an empty log or a refused call is
-# Not evaluated (None), never False. See test_audit_trail_not_evaluated.py.
-NO_ANSWER = {"isActivityAuditTrailEnabled": None}
-
-
-def expected_no(key):
-    return NO_ANSWER.get(key, False)
+def assert_not_measured(out, key):
+    """The pair, not the value. None under a "success" status is still graded as a FAIL."""
+    assert out["transformedResponse"][key] is None
+    collection = out["additionalInfo"]["dataCollection"]
+    assert collection["status"] == "error"
+    assert collection["errors"]
+    assert all(isinstance(e, str) and e for e in collection["errors"])
 
 
 @pytest.mark.parametrize("name,key,good,bad", CASES)
@@ -103,149 +162,121 @@ def test_good_and_flip(name, key, good, bad):
     for form in (good, enriched(good)):
         assert module.transform(form)["transformedResponse"][key] is True
     for form in (bad, enriched(bad)):
-        assert module.transform(form)["transformedResponse"][key] is expected_no(key)
+        out = module.transform(form)
+        # An empty audit log proves nothing (main's ruling): not evaluated, never a measured False.
+        assert out["transformedResponse"][key] is (None if key == "isActivityAuditTrailEnabled" else False)
+        if key == "isActivityAuditTrailEnabled":
+            continue
+        assert out["additionalInfo"]["dataCollection"]["status"] == "success"
 
 
 @pytest.mark.parametrize("name,key,good,bad", CASES)
-def test_fail_closed(name, key, good, bad):
+@pytest.mark.parametrize("shape", [s[0] for s in NO_EVIDENCE])
+def test_no_evidence_is_not_a_finding(name, key, good, bad, shape):
+    """A body that proves nothing reaches the evaluator as not evaluated, not as a red."""
     module = load(name)
-    for body in BAD:
-        assert module.transform(body)["transformedResponse"][key] is expected_no(key)
-        assert module.transform(enriched(body))["transformedResponse"][key] is expected_no(key)
+    body = dict(NO_EVIDENCE)[shape]
+    assert_not_measured(module.transform(body()), key)
+    assert_not_measured(module.transform(enriched(body())), key)
 
 
-# A single audit event or SCIM-managed member is proof on its own, and the spend limit is not a list.
+# A single audit event or SCIM-managed member is proof on its own, and the spend limit is not
+# a list, so a partial read does not change those answers.
 PARTIAL = [c for c in CASES if c[1] not in ("isActivityAuditTrailEnabled", "isSCIMProvisioningEnabled", "isSpendLimitEnforced")]
 
 
 @pytest.mark.parametrize("name,key,good,bad", PARTIAL)
-def test_partial_list_fails(name, key, good, bad):
-    """A list the pager did not finish (has_more true) never passes."""
+def test_partial_list_is_not_measured(name, key, good, bad):
+    """A list the pager did not finish is a sample, not an estate: it measures nothing."""
     body = copy.deepcopy(good)
     body["has_more"] = True
-    assert load(name).transform(body)["transformedResponse"][key] is False
+    assert_not_measured(load(name).transform(body), key)
 
 
-# --- vendor answers that arrive as data (Integration-Service vendorErrorAsResponse) -------------------
+# ---------------------------------------------------------------------------------------
+# isSCIMProvisioningEnabled reads SCIM state off the object the vendor guarantees it on.
+# ---------------------------------------------------------------------------------------
 
-def envelope(status, text, body=None):
-    """The shape Integration-Service hands over for a vendor error the method opted in to as data."""
-    return {"vendorErrorAsResponse": {"status": status, "bodyContains": text,
-                                      "body": body if body is not None else {"error": {"message": text + "."}}}}
-
-
-NO_LIMIT = envelope(404, "No organization spend limit is configured")
-NOT_ENABLED = envelope(403, "Data retention controls are not enabled for this organization")
-PERMISSION_403 = {"error": True, "status": "Error", "statusCode": 403, "message": "HTTP 403: Forbidden; vendor said: "
-                  "You do not have permission to perform this action."}
+SCIM = "isSCIMProvisioningEnabled"
 
 
-def reasons(out):
-    return " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
+def scim_transform(body):
+    return load("isscimprovisioningenabled").transform(body)
 
 
-@pytest.mark.parametrize("wrap", [lambda b: b, enriched, lambda b: {"apiResponse": b}, lambda b: json.dumps(b)])
-def test_spend_limit_404_is_an_answer(wrap):
-    out = load("isspendlimitenforced").transform(wrap(NO_LIMIT))
-    assert out["transformedResponse"]["isSpendLimitEnforced"] is False
-    assert out["transformedResponse"]["spendLimitConfigured"] is False
-    assert "no hard spend limit is configured" in reasons(out)
-    # an answer, not a failed call: the evaluator must grade it, so the data collection succeeded
-    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
-    assert "credential" not in reasons(out) and "Retry" not in reasons(out)
-
-
-@pytest.mark.parametrize("body", [
-    envelope(404, "Some other not found"),
-    envelope(403, "No organization spend limit is configured"),
-    envelope(401, "No organization spend limit is configured"),
-    {"error": True, "status": "Error", "statusCode": 404, "message": "HTTP 404: Not Found"},
-    PERMISSION_403,
-])
-def test_spend_limit_other_refusals_stay_refusals(body):
-    for form in (body, enriched(body)):
-        out = load("isspendlimitenforced").transform(form)
-        assert out["transformedResponse"]["isSpendLimitEnforced"] is False
-        assert "spendLimitConfigured" not in out["transformedResponse"]
-        assert "no hard spend limit is configured" not in reasons(out)
-
-
-def test_spend_limit_real_limit_still_passes():
-    assert load("isspendlimitenforced").transform(SPEND)["transformedResponse"]["isSpendLimitEnforced"] is True
-
-
-@pytest.mark.parametrize("wrap", [lambda b: b, enriched])
-def test_zdr_not_enabled_is_an_answer(wrap):
-    body = dict(lst([project("p1")]), orgDataRetention=NOT_ENABLED, projectDataRetention=[envelope(403, "Data retention controls are not enabled for this organization")])
-    out = load("iszerodataretentionenabled").transform(wrap(body))
-    assert out["transformedResponse"]["isZeroDataRetentionEnabled"] is False
-    assert out["transformedResponse"]["dataRetentionControlsEnabled"] is False
-    assert "controls are not enabled" in reasons(out)
-    assert "credential" not in reasons(out) and "not permitted" not in reasons(out)
+def test_group_list_with_a_scim_managed_group_passes():
+    out = scim_transform(lst([group("g1", scim=True), group("g2", scim=False)]))
+    assert out["transformedResponse"][SCIM] is True
     assert out["additionalInfo"]["dataCollection"]["status"] == "success"
 
 
-@pytest.mark.parametrize("org", [
-    PERMISSION_403,
-    envelope(403, "Insufficient permissions for this operation"),
-    envelope(404, "Data retention controls are not enabled for this organization"),
-    {"error": True, "status": "Error", "statusCode": 401, "message": "HTTP 401: Unauthorized"},
-])
-def test_zdr_real_permission_refusal_stays_a_permission_problem(org):
-    body = dict(lst([project("p1")]), orgDataRetention=org, projectDataRetention=[])
-    for form in (body, enriched(body)):
-        out = load("iszerodataretentionenabled").transform(form)
-        assert out["transformedResponse"]["isZeroDataRetentionEnabled"] is False
-        assert "dataRetentionControlsEnabled" not in out["transformedResponse"]
-        assert "controls are not enabled" not in reasons(out)
-    if org is PERMISSION_403:
-        assert "not permitted" in reasons(load("iszerodataretentionenabled").transform(body))
+def test_group_list_with_no_scim_managed_group_fails():
+    out = scim_transform(lst([group("g1"), group("g2")]))
+    assert out["transformedResponse"][SCIM] is False
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
 
 
-def test_zdr_project_row_not_read_never_passes():
-    body = dict(RET, projectDataRetention=[envelope(403, "Data retention controls are not enabled for this organization")])
-    out = load("iszerodataretentionenabled").transform(body)
-    assert out["transformedResponse"]["isZeroDataRetentionEnabled"] is False
-    assert "not fully read" in reasons(out)
+def test_group_summary_spelling_is_read_too():
+    """Group.scim_managed and GroupResponse.is_scim_managed are the same fact, two spellings."""
+    out = scim_transform(lst([group("g1", scim=True, spelling="scim_managed")]))
+    assert out["transformedResponse"][SCIM] is True
 
 
-@pytest.mark.parametrize("wrap", [lambda b: b, enriched])
-@pytest.mark.parametrize("empty", [lst([]), lst([], has_more=True), {"object": "list", "data": []}])
-def test_audit_log_empty_list_is_not_evaluated(wrap, empty):
-    out = load("isactivityaudittrailenabled").transform(wrap(empty))
-    assert out["transformedResponse"]["isActivityAuditTrailEnabled"] is None
-    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
-    assert "no setting" in out["additionalInfo"]["dataCollection"]["errors"][0]
-    assert out["additionalInfo"]["evaluation"]["failReasons"] == []
+def test_partial_group_list_with_no_scim_group_is_not_measured():
+    """"None of the groups on page one" is a sample, not a finding."""
+    assert_not_measured(scim_transform(lst([group("g1")], has_more=True)), SCIM)
 
 
-def test_audit_log_with_events_still_passes_and_junk_is_not_evaluated():
-    module = load("isactivityaudittrailenabled")
-    good = lst([{"id": "audit_log-1", "type": "api_key.created", "effective_at": NOW - 40 * DAY}])
-    assert module.transform(good)["transformedResponse"]["isActivityAuditTrailEnabled"] is True
-    junk = module.transform(lst([{"note": "x"}]))
-    assert junk["transformedResponse"]["isActivityAuditTrailEnabled"] is None
-    assert junk["additionalInfo"]["dataCollection"]["status"] == "error"
+def test_partial_group_list_with_a_scim_group_still_passes():
+    """One SCIM-managed group is proof on its own; the unread pages cannot withdraw it."""
+    assert scim_transform(lst([group("g1", scim=True)], has_more=True))["transformedResponse"][SCIM] is True
 
 
-def test_the_phrase_is_read_from_the_vendor_body_not_the_echoed_matcher():
-    # bodyContains carries the phrase but the vendor body does not: not the documented answer, so a refusal
-    echo_only = {"vendorErrorAsResponse": {"status": 404, "bodyContains": "No organization spend limit is configured",
-                                           "body": {"error": {"message": "Not found."}}}}
-    out = load("isspendlimitenforced").transform(echo_only)
-    assert out["transformedResponse"]["isSpendLimitEnforced"] is False
-    assert "spendLimitConfigured" not in out["transformedResponse"]
-    assert "no hard spend limit is configured" not in reasons(out)
-    ret = {"vendorErrorAsResponse": {"status": 403, "bodyContains": "Data retention controls are not enabled for this organization",
-                                     "body": {"error": {"message": "Forbidden."}}}}
-    out = load("iszerodataretentionenabled").transform(dict(lst([project("p1")]), orgDataRetention=ret, projectDataRetention=[]))
-    assert "dataRetentionControlsEnabled" not in out["transformedResponse"]
-    assert "controls are not enabled" not in reasons(out)
+def test_user_list_without_the_optional_field_is_not_measured():
+    """The defect this replaces: OpenAI omits is_scim_managed on users, and omission is not false.
+
+    Labs' own live /v1/organization/users body carries exactly these fields on every user. The
+    previous implementation answered False here, which no customer could ever clear.
+    """
+    assert_not_measured(scim_transform(lst([bare_user("u1", "owner"), bare_user("u2")])), SCIM)
 
 
-def test_the_documented_spec_phrase_is_also_the_no_limit_answer():
-    spec = envelope(404, "does not have a hard spend limit", {"error": {"message": "The organization does not have a hard spend limit."}})
-    out = load("isspendlimitenforced").transform(spec)
-    assert out["transformedResponse"]["isSpendLimitEnforced"] is False
-    assert out["transformedResponse"]["spendLimitConfigured"] is False
-    assert "no hard spend limit is configured" in reasons(out)
+def test_user_list_that_does_report_the_field_is_still_measured():
+    """Where OpenAI does send the optional field, it is a real measurement in both directions."""
+    assert scim_transform(lst([user("u1", "owner")]))["transformedResponse"][SCIM] is True
+    assert scim_transform(lst([user("u1", "owner", scim=False)]))["transformedResponse"][SCIM] is False
+
+
+def test_partial_user_list_with_no_scim_member_is_not_measured():
+    """The user path must hold the same line as the group path: page one is a sample.
+
+    With has_more not false, the members that were not read may be exactly the SCIM-managed
+    ones, so "none of the ones we saw" cannot be reported as a measured False.
+    """
+    assert_not_measured(scim_transform(lst([user("u1", "owner", scim=False),
+                                            user("u2", scim=False)], has_more=True)), SCIM)
+
+
+def test_a_user_list_with_no_has_more_at_all_is_not_measured():
+    """complete is True only when has_more is literally false; a bare list is not an estate."""
+    body = {"object": "list", "data": [user("u1", "owner", scim=False)]}
+    assert_not_measured(scim_transform(body), SCIM)
+
+
+def test_partial_user_list_with_a_scim_member_still_passes():
+    """One SCIM-managed member settles the True; the unread pages cannot withdraw it."""
+    out = scim_transform(lst([user("u1", "owner", scim=False), user("u2", scim=True)], has_more=True))
+    assert out["transformedResponse"][SCIM] is True
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+
+
+def test_a_complete_user_list_with_no_scim_member_is_still_a_red():
+    """The fix must not cost the real finding: a list read to the end still fails."""
+    out = scim_transform(lst([user("u1", "owner", scim=False), user("u2", scim=False)], has_more=False))
+    assert out["transformedResponse"][SCIM] is False
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+
+
+def test_group_list_that_reports_no_scim_field_is_not_measured():
+    """is_scim_managed is required on GroupResponse, so a group without it is an unknown shape."""
+    assert_not_measured(scim_transform(lst([{"id": "g1", "name": "g1", "group_type": "group"}])), SCIM)

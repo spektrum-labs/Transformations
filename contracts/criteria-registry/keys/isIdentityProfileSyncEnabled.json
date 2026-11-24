@@ -1,0 +1,39 @@
+{
+  "name": "isIdentityProfileSyncEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "At least one JumpCloud identity provider is configured and not disabled.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "identity providers returned by listIdentityProviders",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "at least one provider whose disabled field is not true",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "non_compliant",
+  "allowedCategories": [
+    "Identity and Access Management"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/identity-and-access-management/jumpcloud/isIdentityProfileSyncEnabled.py (the file's own docstring and rule)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-23",
+      "change": "Registered at V0 so the key stops being grandfathered by the allowlist; proposed, single emitter, definition taken from the emitting transform."
+    }
+  ],
+  "notes": "Records that a provider is enabled, not that it has synced recently."
+}

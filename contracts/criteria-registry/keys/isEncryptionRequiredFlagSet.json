@@ -1,0 +1,39 @@
+{
+  "name": "isEncryptionRequiredFlagSet",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The IDrive client configuration requires encryption: the decoded configuration_id token carries a truthy encryptionRequired value (as the emitter reads it today: any non-empty string, including \"false\", counts), so newly enrolled devices are provisioned with mandatory encryption.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the one client configuration token returned by getConfigurationId",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "configuration_id present, decodes to JSON, encryptionRequired is truthy (bool() of the decoded value, so the string \"false\" reads true)",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "non_compliant",
+  "allowedCategories": [
+    "Backups"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/backups/idrive/isEncryptionRequiredFlagSet.py (the file's own docstring and rule)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-23",
+      "change": "Registered at V0 so the key stops being grandfathered by the allowlist; proposed, single emitter, definition taken from the emitting transform."
+    }
+  ],
+  "notes": "As the emitter stands, it returns False, not null, when the token is missing or cannot be decoded, which breaks this entry's notMeasured rule; and it reads encryptionRequired with bool(), not an is-True test. Both are listed in the PR body as found while drafting and left for a fail-closed follow-up. It reads the default client configuration, not each device's actual encryption."
+}
