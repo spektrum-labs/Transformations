@@ -10,7 +10,7 @@ The window is measured from the newest heartbeat in the response, not the wall c
 as SentinelOne). None when the agent list is missing, an error, possibly truncated, or empty.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 WINDOW_DAYS = 15
 # getAgents asks for filter={"limit":1000}; a response that fills the limit may be cut short.
@@ -144,7 +144,7 @@ def split_window(installed):
     judged = []
     stale = []
     for a, d in seen:
-        if d is not None and (newest - d).days <= WINDOW_DAYS:
+        if d is not None and (newest - d) <= timedelta(days=WINDOW_DAYS):
             judged.append(a)
         else:
             stale.append(a)
