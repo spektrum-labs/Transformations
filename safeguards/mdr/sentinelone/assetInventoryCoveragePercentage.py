@@ -1,13 +1,23 @@
 """Transformation: assetInventoryCoveragePercentage - SentinelOne Vigilance MDR, method getAgents.
 
 Percentage of endpoints known to SentinelOne (every registered agent that has not been
-decommissioned) that have an installed agent actively reporting in (isActive=true).
-Endpoints SentinelOne has never seen (no agent, no Ranger record in this response) cannot be
-counted, so this measures coverage of the SentinelOne-registered inventory. None when the agent
-list is missing, an error, or partial.
+decommissioned, within the check-in window below) that still have the agent installed (not
+uninstalled). Endpoints SentinelOne has never seen (no agent, no Ranger record in this response)
+cannot be counted, so this measures coverage of the SentinelOne-registered inventory. None when
+the agent list is missing, an error, or partial, or when every agent is outside the window.
+
+It deliberately does NOT gate on isActive, matching epp/sentinelone/requiredCoveragePercentage.py:
+isActive reflects only a current console session, so it is false for asleep, offline or roaming
+endpoints that remain installed and protected. Gating on it made the score follow how many
+endpoints were online when the check ran and produced false low-coverage fails. Staleness is
+handled the same way as there: an agent whose lastActiveDate is more than 15 days before the newest
+check-in in the response is left out of the count and reported as staleAgentCount. isEDRAgentActive
+and staleAgentOfflineCount are the checks about activity.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+
+ACTIVE_WINDOW_DAYS = 15
 
 
 def coerce_bool(value):
@@ -145,6 +155,40 @@ def installed_agents(agents):
     return out
 
 
+def parse_seen(value):
+    try:
+        # strptime imports _strptime, which the Token-Service sandbox refuses.
+        return datetime.fromisoformat(str(value)[:19])
+    except Exception:
+        return None
+
+
+def fresh_agents(agents):
+    """(agents judged, stale count): endpoint rules 2026-09-29, the 15-day window on the newest check-in.
+
+    Same rule as epp/sentinelone/requiredCoveragePercentage.py. An agent whose lastActiveDate is more
+    than 15 days before the newest lastActiveDate in the response is stale and left out. When the
+    newest check-in is itself more than 15 days old the fleet is dark and every dated agent is stale.
+    An agent with no readable lastActiveDate is judged, not dropped.
+    """
+    seen = [parse_seen(a.get("lastActiveDate")) for a in agents]
+    known = [s for s in seen if s is not None]
+    if not known:
+        return list(agents), 0
+    cutoff = max(known) - timedelta(days=ACTIVE_WINDOW_DAYS)
+    wall_cutoff = datetime.utcnow() - timedelta(days=ACTIVE_WINDOW_DAYS)
+    if max(known) < wall_cutoff:
+        cutoff = wall_cutoff
+    fresh = []
+    stale = 0
+    for agent, when in zip(agents, seen):
+        if when is not None and when < cutoff:
+            stale = stale + 1
+        else:
+            fresh.append(agent)
+    return fresh, stale
+
+
 def not_measured(key, problem, validation):
     return create_response(
         result={key: None},
@@ -157,34 +201,50 @@ def not_measured(key, problem, validation):
 
 def transform(input):
     key = "assetInventoryCoveragePercentage"
+    meta = {"transformationId": key, "vendor": "SentinelOne", "category": "mdr"}
     validation = extract_validation(input)
     agents, problem = complete_read(raw_body(input), "agent")
     if problem is not None:
         return not_measured(key, problem, validation)
-    known = [a for a in agents if not coerce_bool(a.get("isDecommissioned"))]
-    installed = installed_agents(agents)
-    active = [a for a in installed if coerce_bool(a.get("isActive"))]
-    summary = {"knownEndpoints": len(known), "installedAgents": len(installed), "activeAgents": len(active)}
+    registered = [a for a in agents if not coerce_bool(a.get("isDecommissioned"))]
+    known, stale = fresh_agents(registered)
+    if registered and not known:
+        return not_measured(key, "All " + str(stale) + " SentinelOne agents last checked in more than "
+                            + str(ACTIVE_WINDOW_DAYS) + " days ago; there is nothing to measure.", validation)
+    installed = installed_agents(known)
+    inactive = [a for a in installed if a.get("isActive") is not None and not coerce_bool(a.get("isActive"))]
+    summary = {"knownEndpoints": len(known), "installedAgents": len(installed),
+               "inactiveInstalledAgents": len(inactive), "staleAgentCount": stale}
     findings = ["Denominator is the SentinelOne-registered inventory; endpoints never registered with SentinelOne are not visible here."]
+    if stale:
+        findings.append(str(stale) + " agent(s) last checked in more than " + str(ACTIVE_WINDOW_DAYS)
+                        + " days before the newest check-in and are left out of the count (staleAgentCount).")
+    if inactive:
+        findings.append(str(len(inactive)) + " installed agent(s) have isActive=false (not online when the check ran); "
+                        "they remain installed and are counted as covered.")
     if not known:
         return create_response(
-            result={key: 0.0, "knownEndpoints": 0, "activeAgents": 0},
+            result={key: 0.0, "knownEndpoints": 0, "installedAgents": 0, "activeAgents": 0, "staleAgentCount": 0},
             validation=validation,
-            fail_reasons=["No endpoints are registered with SentinelOne, so no endpoint has an active agent."],
+            fail_reasons=["No endpoints are registered with SentinelOne, so no endpoint has an installed agent."],
             recommendations=["Deploy the SentinelOne agent to managed endpoints."],
             input_summary=summary,
             additional_findings=findings,
-            metadata={"transformationId": key, "vendor": "SentinelOne", "category": "mdr"},
+            metadata=meta,
         )
-    pct = round(len(active) * 100.0 / len(known), 2)
-    text = (str(len(active)) + " of " + str(len(known)) + " known endpoints have an active SentinelOne agent reporting in ("
+    pct = round(len(installed) * 100.0 / len(known), 2)
+    text = (str(len(installed)) + " of " + str(len(known)) + " known endpoints have the SentinelOne agent installed ("
             + str(pct) + "%).")
     return create_response(
-        result={key: pct, "knownEndpoints": len(known), "activeAgents": len(active)},
+        # activeAgents kept for compatibility; it now carries the installed (covered) count, as in EPP.
+        result={key: pct, "knownEndpoints": len(known), "installedAgents": len(installed),
+                "activeAgents": len(installed), "staleAgentCount": stale},
         validation=validation,
-        pass_reasons=[text] if len(active) == len(known) else [],
-        fail_reasons=[] if len(active) == len(known) else [text],
+        pass_reasons=[text] if len(installed) == len(known) else [],
+        fail_reasons=[] if len(installed) == len(known) else [text],
+        recommendations=[] if len(installed) == len(known) else
+        ["Reinstall the SentinelOne agent on the endpoints where it was uninstalled."],
         input_summary=summary,
         additional_findings=findings,
-        metadata={"transformationId": key, "vendor": "SentinelOne", "category": "mdr"},
+        metadata=meta,
     )
