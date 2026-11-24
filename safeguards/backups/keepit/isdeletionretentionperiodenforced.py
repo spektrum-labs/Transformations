@@ -8,11 +8,18 @@
 #         https://developers.keepit.com/api/products/resources#list-resources
 #           schema "user-resources": resource/name, resource/limit
 #         https://developers.keepit.com/resource-names
-#           generic-snapshot-retention and <type>-snapshot-retention, type "duration",
-#           "Keep snapshots ... no more than this period"
+#           generic-snapshot-retention and <type>-snapshot-retention, "Keep snapshots ... no
+#           more than this period"; delete-retention-period, "Period during which deleted
+#           device/user can be recovered". A live body states these as a resource with
+#           type "period" and a limit that is an ISO 8601 duration, for example
+#           {"name": "delete-retention-period", "type": "period", "limit": "P1M"}.
 #
-# An item deleted at the source stays recoverable in Keepit for as long as a snapshot that
-# holds it is kept, so the snapshot retention is the deletion-retention window.
+# Two periods answer this check, and the shortest stated one decides:
+#   * delete-retention-period: how long a deleted connector or user stays recoverable. It is one
+#     account-wide resource, so it covers every connector.
+#   * snapshot retention: how long a snapshot (and so an item deleted at the source) is kept,
+#     per connector. An item deleted at the source stays recoverable for as long as a snapshot
+#     that holds it is kept.
 
 import json
 import re
@@ -24,14 +31,26 @@ METHOD = "getRetentionConfig"
 
 def transform_bare(input):
     """
-    True when every cloud connector's effective snapshot retention is at least one month
-    (30 days), so an item deleted at the source stays recoverable for at least that long.
+    True when the retention Keepit states is at least one month (30 days), so a deleted
+    connector, user or item stays recoverable for at least that long.
 
-    Proves: the retention Keepit applies to each connector, read from Keepit's own
-    configuration. Does not prove: that a given item was ever backed up. A connector below the
-    minimum, or an account with no cloud connectors, answers false. A connector with no
-    readable retention (and none below the minimum), a retention that is not an ISO 8601
-    duration, or an unreadable body answers None (not measured).
+    Two periods are read, each as an ISO 8601 duration (a month is 30 days, a year 365):
+    the account's delete-retention-period resource (how long a deleted connector or user stays
+    recoverable) and each cloud connector's effective snapshot retention. The shortest stated
+    period decides:
+      * any stated period below the minimum answers false, whatever the others say;
+      * a stated value that is not an ISO 8601 duration (a bare number, "unlimited", a zero
+        duration) answers None: its unit or meaning is not documented, so it can neither pass
+        nor fail the account;
+      * otherwise, when delete-retention-period is stated and meets the minimum, the answer is
+        true, including for a connector that states no snapshot retention of its own;
+      * when delete-retention-period is not stated, the answer is true only if every connector
+        states a snapshot retention that meets the minimum, and None if one does not.
+
+    Proves: the retention Keepit applies, read from Keepit's own configuration. Does not prove:
+    that a given item was ever backed up. An account with no cloud connectors answers false (no
+    retention applies to nothing). An unreadable, empty, refused or partial body answers None
+    (not measured), never false.
     """
     key = "isDeletionRetentionPeriodEnforced"
 
@@ -75,6 +94,8 @@ def transform_bare(input):
             res = {}
         if not isinstance(res, dict):
             return None, "<resources> element has an unexpected shape"
+        if res.get("error") is True:
+            return None, "The /resources call was refused or failed, so the retention resources could not be read"
         out = {}
         for r in listify(res.get("resource")):
             if isinstance(r, dict) and r.get("name"):
@@ -98,7 +119,10 @@ def transform_bare(input):
         return days
 
     def retention_rows(input):
-        """Effective snapshot retention for each cloud connector, or (None, reason).
+        """(rows, deletion, None) or (None, None, reason).
+
+        rows: effective snapshot retention for each cloud connector. deletion: the account's
+        delete-retention-period resource as {"retention", "days"}, or None when it is not stated.
 
         Most specific value wins: the connector's own <backup-retention> (listDevices), then the
         product resource "<type>-snapshot-retention", then "generic-snapshot-retention"
@@ -107,23 +131,29 @@ def transform_bare(input):
         """
         data = unwrap(parse_input(input), "devices")
         if not isinstance(data, dict):
-            return None, "Response is not an object"
+            return None, None, "Response is not an object"
         if data.get("error") is True:
-            return None, "Integration-Service returned an error envelope"
+            return None, None, "Integration-Service returned an error envelope"
         if "devices" not in data:
-            return None, "Response has no <devices> element, so no connector could be read"
+            return None, None, "Response has no <devices> element, so no connector could be read"
         resources, problem = read_resources(data)
         if resources is None:
-            return None, problem
+            return None, None, problem
         devices = data.get("devices")
         if devices is None or devices == "":
             devices = {}
         if not isinstance(devices, dict):
-            return None, "<devices> element has an unexpected shape"
+            return None, None, "<devices> element has an unexpected shape"
+        if devices.get("error") is True:
+            return None, None, "The /devices call was refused or failed, so no connector could be read"
+        deletion = None
+        stated = resources.get("delete-retention-period")
+        if stated not in [None, ""]:
+            deletion = {"retention": stated, "days": duration_days(stated)}
         rows = []
         for c in listify(devices.get("cloud")):
             if not isinstance(c, dict):
-                continue
+                return None, None, "A connector entry could not be read, so the connector list is incomplete"
             kind = str(c.get("type") or "").strip()
             prefix = "o365" if kind == "o365-admin" else kind
             own = c.get("backup-retention")
@@ -138,28 +168,45 @@ def transform_bare(input):
             name = str(c.get("name") or c.get("guid") or "")
             rows.append({"connector": name + " (" + kind + ")" if kind else name, "retention": value,
                          "source": source, "days": duration_days(value)})
-        return rows, None
+        return rows, deletion, None
 
-    def judge(rows, minimum_days, label):
+    def judge(rows, deletion, minimum_days, label):
         if len(rows) == 0:
             return False, "The account has no cloud connectors, so no retention applies"
         short = [r for r in rows if r["days"] is not None and r["days"] < minimum_days]
-        unknown = [r for r in rows if r["days"] is None]
-        if short:
-            return False, str(len(short)) + " of " + str(len(rows)) + " cloud connectors keep snapshots for less than " + label
-        if unknown:
-            return None, str(len(unknown)) + " of " + str(len(rows)) + " cloud connectors have no readable retention (missing or not an ISO 8601 duration)"
+        deletion_short = deletion is not None and deletion["days"] is not None and deletion["days"] < minimum_days
+        if deletion_short or short:
+            parts = []
+            if deletion_short:
+                parts.append("delete-retention-period is " + str(deletion["retention"]) + ", a deleted connector or user is recoverable for less than " + label)
+            if short:
+                parts.append(str(len(short)) + " of " + str(len(rows)) + " cloud connectors keep snapshots for less than " + label)
+            return False, "; ".join(parts)
+        unreadable = [r for r in rows if r["retention"] is not None and r["days"] is None]
+        unstated = [r for r in rows if r["retention"] is None]
+        if deletion is not None and deletion["days"] is None:
+            return None, "delete-retention-period is " + str(deletion["retention"]) + ", which is not an ISO 8601 duration, so the deletion retention could not be read"
+        if unreadable:
+            return None, str(len(unreadable)) + " of " + str(len(rows)) + " cloud connectors state a snapshot retention that is not an ISO 8601 duration, so the retention could not be read"
+        if deletion is not None:
+            reason = "delete-retention-period is " + str(deletion["retention"]) + ", a deleted connector or user stays recoverable for at least " + label
+            if len(rows) > len(unstated):
+                reason += "; every snapshot retention Keepit states is also at least that long"
+            return True, reason
+        if unstated:
+            return None, str(len(unstated)) + " of " + str(len(rows)) + " cloud connectors state no snapshot retention and delete-retention-period is not stated, so no retention could be read"
         return True, "All " + str(len(rows)) + " cloud connectors keep snapshots for at least " + label
 
     try:
-        rows, problem = retention_rows(input)
+        rows, deletion, problem = retention_rows(input)
         if rows is None:
             return {key: None, "reason": problem}
-        result, reason = judge(rows, 30, "one month (30 days)")
+        result, reason = judge(rows, deletion, 30, "one month (30 days)")
         return {
             key: result,
             "reason": reason,
             "minimumDays": 30,
+            "deleteRetentionPeriod": deletion,
             "connectors": rows,
         }
     except Exception as e:
