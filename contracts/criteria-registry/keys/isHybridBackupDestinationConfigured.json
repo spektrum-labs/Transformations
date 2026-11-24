@@ -1,0 +1,39 @@
+{
+  "name": "isHybridBackupDestinationConfigured",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "At least one IDrive backup plan backs up to both a cloud and a local destination (backup_details.where_to_backup contains CLOUD and LOCAL).",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "backup plans returned by getBackupPlan",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "at least one plan whose where_to_backup lists both CLOUD and LOCAL",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "non_compliant",
+  "allowedCategories": [
+    "Backups"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/backups/idrive/isHybridBackupDestinationConfigured.py (the file's own docstring and rule)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-23",
+      "change": "Registered at V0 so the key stops being grandfathered by the allowlist; proposed, single emitter, definition taken from the emitting transform."
+    }
+  ],
+  "notes": "The file returns False, not null, when the plan list is empty."
+}

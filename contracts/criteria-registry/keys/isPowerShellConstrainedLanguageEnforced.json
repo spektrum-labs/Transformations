@@ -1,0 +1,39 @@
+{
+  "name": "isPowerShellConstrainedLanguageEnforced",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "PowerShell runs in constrained language mode on every Windows device: an App Control for Business (WDAC) policy with user-mode code integrity, or an AppLocker script rule, is enforced and assigned to all devices. Ruling recorded in the file: WDAC or AppLocker in enforce mode, assigned to all devices, counts.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "App Control and device-configuration policies read from Intune, with their assignments",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "an enforce-mode WDAC or AppLocker policy assigned to all devices, per the file's mode and assignment rules",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Endpoint Security"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/assetmgmt/microsoft-intune/ispowershellconstrainedlanguageenforced.py (the file's own docstring and rule)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-23",
+      "change": "Registered at V0 so the key stops being grandfathered by the allowlist; proposed, single emitter, definition taken from the emitting transform."
+    }
+  ],
+  "notes": "Not reviewed in detail beyond the file's own docstring; the exact policy-mode rules are in the file."
+}

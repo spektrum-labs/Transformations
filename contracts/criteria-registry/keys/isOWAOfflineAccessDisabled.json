@@ -1,0 +1,39 @@
+{
+  "name": "isOWAOfflineAccessDisabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Outlook on the web offline access is off for every OWA mailbox policy in use: AllowOfflineOn is NoComputers on each. False when a policy in use allows PrivateComputersOnly or AllComputers.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "OWA mailbox policies of the tenant, narrowed to those in use by OWA-enabled mailboxes (the default policy counts when a mailbox has none assigned)",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "every policy is NoComputers, or every policy in use is NoComputers on a complete usage read",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Email Security",
+    "Messaging Security"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/874a78ff-2ca3-4c0e-ab86-19277536ac87/isowaofflineaccessdisabled.py (the file's own docstring and rule)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-23",
+      "change": "Registered at V0 so the key stops being grandfathered by the allowlist; proposed, single emitter, definition taken from the emitting transform."
+    }
+  ]
+}
