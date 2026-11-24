@@ -1,9 +1,12 @@
 """Transformation: isAgentDeployed - Liongard, method getAgents (POST /api/v2/view-agents).
 
 Liongard agents (Cloud, On-Premises or Self-Managed) run the inspections. An agent counts as deployed
-when it is listed and not removed (uninstalled, decommissioned, deleted, disabled, retired, archived),
-whatever its momentary online state: an agent that is offline or disconnected when the check runs is
-still installed. Counting only agents that were online made the result follow the time of day.
+only on positive evidence: a status (status / agentStatus / state / connectionStatus) that shows it is
+installed, online or offline (DEPLOYED_STATES), or an installed / deployed flag set true. Momentary online
+state does not matter: an agent that is offline or disconnected when the check runs is still installed.
+An agent whose status is a removed word (uninstalled, decommissioned, deleted, disabled, retired, archived),
+any other word (Failed, Pending, ...) or a false installed flag is not deployed. An agent with no readable
+status at all is not deployed either, and is reported (unreadAgentCount); being listed is not evidence.
 
 Endpoint rules (2026-09-29), as across the EPP transforms: when the agents carry a last-seen time
 (lastSeen / lastHeartbeat / lastContact / lastCheckIn, any case), an agent more than 15 days older than
@@ -13,8 +16,9 @@ readable last-seen time is judged, not dropped. When no agent carries one, every
 and a finding says so.
 
 isAgentDeployed is True when at least 80% of the judged agents are deployed. An empty agent list is
-False (no agent is deployed). An unreadable body, an error envelope, or a fleet where every agent is
-stale is not evaluated: None with additionalInfo.dataCollection.status "error".
+False (no agent is deployed). An unreadable body, an error envelope, a fleet where every agent is stale,
+or a list where no judged agent carries a readable status is not evaluated: None with
+additionalInfo.dataCollection.status "error".
 """
 import json
 from datetime import datetime, timezone
@@ -25,7 +29,11 @@ REMOVED_STATES = ("uninstalled", "decommissioned", "deleted", "removed", "disabl
 LIST_KEYS = ("data", "agents", "items", "results")
 SEEN_KEYS = ("lastseen", "lastseenon", "lastheartbeat", "lastheartbeaton", "lastcontact", "lastcheckin",
              "lastcheckinon", "lastcheckedin")
-STATUS_KEYS = ("status", "agentstatus", "state")
+STATUS_KEYS = ("status", "agentstatus", "state", "connectionstatus")
+#: Statuses that show the agent is installed, whether it is online at the moment or not.
+DEPLOYED_STATES = ("active", "online", "connected", "healthy", "running", "installed", "deployed", "enabled",
+                   "offline", "disconnected", "idle", "asleep", "sleeping", "unreachable", "warning")
+INSTALLED_FLAGS = ("installed", "isinstalled", "deployed", "isdeployed")
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
@@ -149,12 +157,34 @@ def fresh_items(items):
     return fresh, stale
 
 
-def is_removed(item):
+def flag_value(value):
+    """True / False for a boolean-like flag, None when it is not one."""
+    if value is True or value is False:
+        return value
+    text = str(value).strip().lower()
+    if text == "true":
+        return True
+    if text == "false":
+        return False
+    return None
+
+
+def agent_evidence(item):
+    """'deployed' on positive evidence, 'not deployed' for a readable status or flag that does not show an
+    installed agent (removed, failed, pending, any unknown word, installed false), '' when the agent carries
+    no readable status or flag at all."""
     low = lower_keys(item)
-    for key in STATUS_KEYS:
-        if str(low.get(key) or "").strip().lower() in REMOVED_STATES:
-            return True
-    return False
+    states = [str(low.get(k) or "").strip().lower() for k in STATUS_KEYS]
+    states = [x for x in states if x]
+    flags = [flag_value(low.get(k)) for k in INSTALLED_FLAGS if k in low]
+    flags = [f for f in flags if f is not None]
+    if not states and not flags:
+        return ""
+    if any(x in REMOVED_STATES for x in states) or False in flags:
+        return "not deployed"
+    if any(x in DEPLOYED_STATES for x in states) or True in flags:
+        return "deployed"
+    return "not deployed"
 
 
 def not_measured(key, problem):
@@ -187,25 +217,35 @@ def transform(input):
         if not judged:
             return not_measured(key, "All " + str(stale) + " Liongard agents were last seen more than "
                                 + str(ACTIVE_WINDOW_DAYS) + " days ago; there is nothing to measure.")
-        deployed = [a for a in judged if not is_removed(a)]
+        evidence = [agent_evidence(a) for a in judged]
+        unread = len([e for e in evidence if e == ""])
+        if unread == len(judged):
+            return not_measured(key, "None of the " + str(len(judged)) + " Liongard agents carries a readable status "
+                                "or installed flag, so no agent is shown to be deployed; nothing to measure.")
+        deployed = [a for a, e in zip(judged, evidence) if e == "deployed"]
         pct = round(len(deployed) * 100.0 / len(judged), 2)
         ok = len(deployed) > 0 and pct >= DEPLOYED_THRESHOLD
         findings = []
+        if unread:
+            findings.append(str(unread) + " agent(s) carry no readable status and are counted as not deployed "
+                            "(unreadAgentCount).")
         if stale:
             findings.append(str(stale) + " agent(s) were last seen more than " + str(ACTIVE_WINDOW_DAYS)
                             + " days before the newest and are left out (staleAgentCount).")
         if not any(has_seen_field(a) for a in agents):
             findings.append("The agent list carries no last-seen time, so every listed agent is judged.")
-        text = (str(len(deployed)) + " of " + str(len(judged)) + " Liongard agents are deployed (" + str(pct)
-                + "%, online or not); the bar is " + str(DEPLOYED_THRESHOLD) + "%.")
+        text = (str(len(deployed)) + " of " + str(len(judged)) + " Liongard agents show they are deployed ("
+                + str(pct) + "%, online or not); the bar is " + str(DEPLOYED_THRESHOLD) + "%.")
         return create_response(
             result={key: ok, "totalAgents": len(judged), "deployedAgents": len(deployed),
-                    "deployedPercentage": pct, "staleAgentCount": stale},
+                    "deployedPercentage": pct, "staleAgentCount": stale, "unreadAgentCount": unread},
             pass_reasons=[text] if ok else [],
             fail_reasons=[] if ok else [text],
-            recommendations=[] if ok else ["Reinstall or re-enable the Liongard agents that were removed."],
+            recommendations=[] if ok else ["Reinstall, repair or re-enable the Liongard agents that are not shown "
+                                           "as installed."],
             additional_findings=findings,
-            input_summary={"listedAgents": len(agents), "judgedAgents": len(judged), "staleAgentCount": stale},
+            input_summary={"listedAgents": len(agents), "judgedAgents": len(judged), "staleAgentCount": stale,
+                           "unreadAgentCount": unread},
             metadata=meta,
         )
     except Exception as e:

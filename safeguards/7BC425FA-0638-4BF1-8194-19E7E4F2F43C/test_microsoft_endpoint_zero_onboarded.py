@@ -186,7 +186,8 @@ def test_onboarded_fleet_values_are_unchanged():
         "requiredCoveragePercentage": 75, "serverCoveragePercentage": 50, "totalEndpointCount": 4,
         "totalServerCount": 2, "eligibleDevices": 4, "protectedDevices": 3, "reportingDevices": 2,
         # FLEET's lastSeen is long past, so the logging window finds the fleet dark: all 3 onboarded are stale.
-        "loggingJudgedDevices": 0, "loggingExcludedStaleDevices": 3, "loggingExcludedInactiveDevices": 0}
+        "loggingJudgedDevices": 0, "loggingExcludedStaleDevices": 3, "loggingExcludedInactiveDevices": 0,
+        "loggingExcludedUndatedDevices": 0}
     assert set(split) <= set(tr)
     assert value(CONFIGURED, FLEET, "isEPPConfigured") == 100
     assert value(EDR, FLEET, "isEDRDeployed") is True

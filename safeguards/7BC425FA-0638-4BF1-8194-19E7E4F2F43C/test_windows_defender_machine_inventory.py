@@ -249,3 +249,55 @@ def test_a_fully_reporting_fleet_reports_no_gap(loader):
     out = loader("epp_transform")(machines(machine(), machine()))
     assert out["transformedResponse"]["isEPPDeployed"] is True
     assert out["additionalInfo"]["evaluation"]["additionalFindings"] == []
+
+
+# ---- follow-up review of #1442: a NON-reporting machine without healthStatus no longer blanks every key
+
+def undated_blind():
+    blind = machine()
+    del blind["healthStatus"]
+    del blind["lastSeen"]
+    return blind
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_non_reporting_machine_without_health_is_left_out_and_reported(loader):
+    # Reviewer's case: one onboarded machine that is not reporting and has no healthStatus turned
+    # isEPPEnabled / isEPPDeployed / isEDRDeployed from True to Not evaluated.
+    out = loader("epp_transform")(machines(machine(), machine(days_ago=2), undated_blind()))
+    tr = out["transformedResponse"]
+    assert collected(out) == "success"
+    for key in ("isEPPEnabled", "isEPPDeployed", "isEDRDeployed", "isEPPLoggingEnabled"):
+        assert tr[key] is True, key
+    assert tr["healthUnreadableDevices"] == 1 and tr["loggingJudgedDevices"] == 2
+    assert any("healthUnreadableDevices" in f for f in out["additionalInfo"]["evaluation"]["additionalFindings"])
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_non_reporting_machine_with_null_health_is_left_out(loader):
+    blind = machine()
+    blind["healthStatus"] = None
+    del blind["lastSeen"]
+    out = loader("epp_transform")(machines(machine(), blind))
+    assert out["transformedResponse"]["isEPPLoggingEnabled"] is True
+    assert out["transformedResponse"]["healthUnreadableDevices"] == 1
+    sick = loader("epp_transform")(machines(machine(), blind, machine(health="NoSensorData", days_ago=3)))
+    assert sick["transformedResponse"]["isEPPLoggingEnabled"] is False
+    assert sick["transformedResponse"]["isEPPDeployed"] is True
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_reporting_machine_with_null_health_still_fails_logging(loader):
+    # Excluding unreadable machines never reaches a reporting one: its null health is not Active.
+    blind = machine()
+    blind["healthStatus"] = None
+    out = loader("epp_transform")(machines(machine(), blind))
+    assert out["transformedResponse"]["isEPPLoggingEnabled"] is False
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_no_readable_health_on_any_judged_machine_is_not_measured(loader):
+    out = loader("epp_transform")(machines(undated_blind(), undated_blind()))
+    assert collected(out) == "error"
+    for key in EPP_KEYS:
+        assert out["transformedResponse"][key] is None, key

@@ -132,3 +132,41 @@ def test_inventory_coverage_all_stale_is_not_measured():
     out = load(key)(body([agent(1, last="2000-01-01T00:00:00Z"), agent(2, last="2000-01-02T00:00:00Z")]))
     assert out["transformedResponse"][key] is None
     assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+
+
+# ---- follow-up review of #1442: a missing or null isUninstalled is not evidence of an installed agent
+
+def unflagged(i, flag="missing", active=None):
+    a = agent(i, active=active)
+    if flag == "missing":
+        del a["isUninstalled"]
+    else:
+        a["isUninstalled"] = flag
+    if active is None:
+        del a["isActive"]
+    return a
+
+
+@pytest.mark.parametrize("flag", ["missing", None, "", "unknown"])
+def test_inventory_coverage_one_unflagged_agent_is_not_measured(flag):
+    # Reviewer's case: one agent with no isUninstalled read 100.0 (it read 0.0 before #1442).
+    out = load("assetInventoryCoveragePercentage")(body([unflagged(1, flag)]))
+    assert out["transformedResponse"]["assetInventoryCoveragePercentage"] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+
+
+def test_inventory_coverage_unflagged_agents_are_left_out_and_reported():
+    key = "assetInventoryCoveragePercentage"
+    out = load(key)(body([agent(1), agent(2, uninstalled=True), unflagged(3), unflagged(4, None)]))
+    result = out["transformedResponse"]
+    assert result[key] == 50.0
+    assert result["knownEndpoints"] == 2 and result["installedAgents"] == 1 and result["unreadAgentCount"] == 2
+    assert any("unreadAgentCount" in f for f in out["additionalInfo"]["evaluation"]["additionalFindings"])
+
+
+def test_inventory_coverage_explicit_false_flag_and_active_agent_count_as_installed():
+    key = "assetInventoryCoveragePercentage"
+    assert value(key, body([agent(1, uninstalled="false"), agent(2, active=False)])) == 100.0
+    # No isUninstalled, but isActive true: the agent is reporting in, the evidence the old code used.
+    assert value(key, body([unflagged(1, active=True)])) == 100.0
+    assert value(key, body([unflagged(1, active=False)])) is None

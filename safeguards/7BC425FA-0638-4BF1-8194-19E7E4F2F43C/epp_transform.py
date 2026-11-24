@@ -29,11 +29,16 @@ Reporting: onboardingStatus "onboarded" (any casing) AND lastSeen within ACTIVE_
       and reported (loggingExcludedStaleDevices, loggingExcludedInactiveDevices). Every other
       healthStatus (ImpairedCommunication, NoSensorData, ...) still fails. No judged machine left is
       False: nothing shows a sensor sending data.
+An onboarded machine that is NOT reporting (no lastSeen within ACTIVE_WINDOW_DAYS of now) and carries no
+readable healthStatus (missing, null or empty) is left out of the isEPPLoggingEnabled judgement and
+reported (healthUnreadableDevices): it neither passes nor fails a key, and the keys are judged on the
+machines whose health can be read.
 Not measured: an error body, records with no onboardingStatus (the alert list is one), a page with
-@odata.nextLink still set, no eligible machine at all, or a reporting machine that carries no
-healthStatus (one missing field used to read as a logging failure). dataCollection.status is one
-flag for the whole response, so if any key cannot be decided none is reported -- a key left None
-under a "success" status would be graded as a failure nobody measured.
+@odata.nextLink still set, no eligible machine at all, a reporting machine that carries no
+healthStatus (one missing field used to read as a logging failure), or judged machines none of which
+carries a readable healthStatus. dataCollection.status is one flag for the whole response, so if any
+key cannot be decided none is reported -- a key left None under a "success" status would be graded as
+a failure nobody measured.
 
 A pass on the three deployment keys says the sensor is deployed somewhere, not that it covers the
 fleet: one reporting machine out of a thousand passes all three, the same reading as One-Click's
@@ -134,6 +139,11 @@ def health_of(machine):
     return str(machine.get("healthStatus") or "").strip().lower()
 
 
+def has_health(machine):
+    """True when the machine carries a healthStatus that can be read (not missing, null or empty)."""
+    return health_of(machine) != ""
+
+
 def logging_population(onboarded):
     """(judged, stale, inactive): the onboarded machines isEPPLoggingEnabled judges (see the docstring).
 
@@ -201,6 +211,10 @@ def measure(machines, partial):
                  if parse_time(m.get("lastSeen")) is not None and parse_time(m.get("lastSeen")) >= cutoff]
     healthy = [m for m in reporting if health_of(m) == "active"]
     judged, stale, inactive = logging_population(onboarded)
+    # A judged machine that is not reporting and has no readable healthStatus is left out and counted;
+    # a reporting machine is never left out (it is held to the guard below).
+    unreadable = [m for m in judged if not has_health(m) and not any(m is r for r in reporting)]
+    judged = [m for m in judged if not any(m is u for u in unreadable)]
     counts = {
         "eligibleDevices": len(eligible),
         "onboardedDevices": len(onboarded),
@@ -209,6 +223,7 @@ def measure(machines, partial):
         "loggingJudgedDevices": len(judged),
         "loggingExcludedStaleDevices": stale,
         "loggingExcludedInactiveDevices": inactive,
+        "healthUnreadableDevices": len(unreadable),
     }
     values = {}
     for key in KEYS:
@@ -219,7 +234,9 @@ def measure(machines, partial):
     # the field got "" here, fell out of healthy, and read isEPPLoggingEnabled False -- a fail
     # nobody measured, which is the failure this file exists to remove. dataCollection.status is
     # one flag for the whole response, so an unreadable sensor health leaves every key None.
-    if not all("healthStatus" in m for m in reporting + judged):
+    # Non-reporting machines without a readable healthStatus were left out above; when they were all
+    # the judged machines there is nothing to read sensor health from.
+    if not all("healthStatus" in m for m in reporting + judged) or (unreadable and not judged):
         return values, counts
     for key in ("isEPPEnabled", "isEPPDeployed", "isEDRDeployed"):
         values[key] = len(reporting) > 0
@@ -261,13 +278,18 @@ def transform(input):
                     reason = ("The machine list has more pages than were read (@odata.nextLink present); "
                               "not judged on a sample")
                 elif values["isEPPDeployed"] is None:
-                    reason = ("Not every reporting machine carries healthStatus, so sensor health cannot be "
-                              "read for the whole inventory")
+                    reason = ("Not every reporting machine carries healthStatus (or no judged machine carries a "
+                              "readable one), so sensor health cannot be read for the inventory")
                 line = (str(counts["reportingDevices"]) + " of " + str(counts["eligibleDevices"])
                         + " eligible machines are onboarded to Defender for Endpoint and sent a full device report "
                         "within " + str(ACTIVE_WINDOW_DAYS) + " days; " + str(counts["activeSensorDevices"])
                         + " of those report an Active sensor")
                 if values["isEPPDeployed"] is not None:
+                    if counts["healthUnreadableDevices"]:
+                        additional_findings.append(
+                            str(counts["healthUnreadableDevices"]) + " onboarded machine(s) that are not reporting "
+                            "carry no readable healthStatus; isEPPLoggingEnabled leaves them out "
+                            "(healthUnreadableDevices) and judges the machines whose health can be read")
                     if counts["loggingExcludedStaleDevices"] or counts["loggingExcludedInactiveDevices"]:
                         additional_findings.append(
                             "isEPPLoggingEnabled judged " + str(counts["loggingJudgedDevices"]) + " onboarded "

@@ -349,8 +349,39 @@ def eligibility_in_effect(row, now):
     return True
 
 
-def eligibility_page_problem(page):
-    """Why one page of the eligibility read is not evidence, '' when it is."""
+def truncation_flag(obj):
+    """The truncation marker set on obj, '' when none: an @odata.nextLink or _links.next href still set, or
+    paginationTruncated / truncated / iterateTruncated on the object itself or under its response_metadata,
+    metadata or pagination block (the markers Integration-Service and the workflow engine use for a cut-off read)."""
+    if not isinstance(obj, dict):
+        return ""
+    if str(obj.get("@odata.nextLink") or "").strip() not in ("", "None", "null"):
+        return "@odata.nextLink"
+    links = obj.get("_links")
+    if isinstance(links, dict) and isinstance(links.get("next"), dict):
+        if str(links.get("next").get("href") or "").strip() not in ("", "None", "null"):
+            return "_links.next"
+    blocks = [("", obj)]
+    for k in ("response_metadata", "metadata", "pagination"):
+        if isinstance(obj.get(k), dict):
+            blocks.append((k + ".", obj.get(k)))
+    for prefix, block in blocks:
+        for k in ("paginationTruncated", "truncated", "iterateTruncated"):
+            value = block.get(k)
+            if value is True or str(value).strip().lower() in ("true", "1"):
+                return prefix + k
+    return ""
+
+
+def cut_text(flag):
+    """'only part of it was read (...)' for a truncation marker from truncation_flag."""
+    if flag in ("@odata.nextLink", "_links.next"):
+        return "only part of it was read (" + flag + " remains)"
+    return "only part of it was read (" + flag + " is set)"
+
+
+def graph_page_problem(page):
+    """Why one Graph list page is not readable evidence (an error, a refusal, no value list), '' when it is."""
     if not isinstance(page, dict):
         return "the body is not an object"
     if "vendorErrorAsResponse" in page:
@@ -367,11 +398,17 @@ def eligibility_page_problem(page):
         return "the read reported an error status"
     if not isinstance(page.get("value"), list):
         return "the body carries no value list"
-    if str(page.get("@odata.nextLink") or "").strip() not in ("", "None", "null"):
-        return "only part of it was read (@odata.nextLink remains)"
-    for k in ("paginationTruncated", "truncated"):
-        if str(page.get(k)).strip().lower() in ("true", "1"):
-            return "only part of it was read (" + k + " is set)"
+    return ""
+
+
+def eligibility_page_problem(page):
+    """Why one page of the eligibility read is not evidence, '' when it is."""
+    problem = graph_page_problem(page)
+    if problem:
+        return problem
+    flag = truncation_flag(page)
+    if flag:
+        return cut_text(flag)
     for row in page.get("value"):
         if not isinstance(row, dict) or not str(row.get("principalId") or "").strip():
             return "an instance is not an object with a principalId"
@@ -381,10 +418,18 @@ def eligibility_page_problem(page):
 def eligibility_rows(data, now):
     """(rows, problem, ended) for the PIM eligibility read.
     Absent: (None, '', 0). Present but not read whole: (None, problem, 0). Read whole: the instances in effect at
-    `now`, and how many were left out because they had ended or not yet begun."""
+    `now`, and how many were left out because they had ended or not yet begun. A truncation marker on the body, on
+    any wrapper around it, or under paginationStats.roleEligibilityScheduleInstances makes the read incomplete:
+    eligible admins were not fully read, so the result can never pass on them."""
     if not isinstance(data, dict) or ELIGIBLE_KEY not in data:
         return None, "", 0
+    incomplete = ("the PIM role eligibility read (" + ELIGIBLE_ENDPOINT + ") is incomplete, so eligible admins "
+                  "were not fully read: ")
     body = data.get(ELIGIBLE_KEY)
+    flag = truncation_flag(body)
+    stats = data.get("paginationStats")
+    if not flag and isinstance(stats, dict) and truncation_flag(stats.get(ELIGIBLE_KEY)):
+        flag = "paginationStats." + ELIGIBLE_KEY + "." + truncation_flag(stats.get(ELIGIBLE_KEY))
     for attempt in range(4):
         if not isinstance(body, dict) or "value" in body:
             break
@@ -396,6 +441,10 @@ def eligibility_rows(data, now):
                 break
         if not moved:
             break
+        if not flag:
+            flag = truncation_flag(body)
+    if flag:
+        return None, incomplete + cut_text(flag), 0
     if isinstance(body, list) and len(body) > 0 and all(
             isinstance(p, dict) and ("value" in p or "error" in p or "vendorErrorAsResponse" in p) for p in body):
         pages = body
@@ -408,7 +457,7 @@ def eligibility_rows(data, now):
     for page in pages:
         problem = eligibility_page_problem(page)
         if problem:
-            return None, "the PIM role eligibility read (" + ELIGIBLE_ENDPOINT + ") is incomplete: " + problem, 0
+            return None, incomplete + problem, 0
         for row in page.get("value"):
             if eligibility_in_effect(row, now):
                 rows.append(row)

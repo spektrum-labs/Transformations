@@ -13,9 +13,13 @@ itself older than 15 days the whole fleet is dark and every dated device is stal
 readable last-seen time is judged, not dropped. When no device carries one, every listed device is
 judged and a finding says so.
 
+A device with no readable status and no managed flag is not deployed (being listed is not evidence) and is
+reported as unreadDeviceCount.
+
 isEPPDeployed is True when at least 80% of the judged devices are deployed. An empty device list is
-False. An unreadable body, an error envelope, or a fleet where every device is stale is not evaluated:
-None with additionalInfo.dataCollection.status "error".
+False. An unreadable body, an error envelope, a fleet where every device is stale, or a list where no judged
+device carries a readable status or managed flag is not evaluated: None with
+additionalInfo.dataCollection.status "error".
 """
 import json
 from datetime import datetime, timezone
@@ -171,6 +175,18 @@ def is_managed(item):
     return False
 
 
+def has_evidence(item):
+    """True when the device carries a status or a managed flag that can be read either way."""
+    low = lower_keys(item)
+    if any(str(low.get(k) or "").strip() for k in STATUS_KEYS):
+        return True
+    for key in ("managed", "ismanaged"):
+        value = low.get(key)
+        if value is True or value is False or str(value).strip().lower() in ("true", "false"):
+            return True
+    return False
+
+
 def is_deployed(item):
     low = lower_keys(item)
     if is_removed(item):
@@ -212,10 +228,17 @@ def transform(input):
         if not judged:
             return not_measured(key, "All " + str(stale) + " Liongard devices were last seen more than "
                                 + str(ACTIVE_WINDOW_DAYS) + " days ago; there is nothing to measure.")
+        unread = len([d for d in judged if not has_evidence(d)])
+        if unread == len(judged):
+            return not_measured(key, "None of the " + str(len(judged)) + " Liongard devices carries a readable "
+                                "status or managed flag, so no device is shown to be monitored; nothing to measure.")
         deployed = [d for d in judged if is_deployed(d)]
         pct = round(len(deployed) * 100.0 / len(judged), 2)
         ok = len(deployed) > 0 and pct >= DEPLOYED_THRESHOLD
         findings = []
+        if unread:
+            findings.append(str(unread) + " device(s) carry no readable status or managed flag and are counted as "
+                            "not deployed (unreadDeviceCount).")
         if stale:
             findings.append(str(stale) + " device(s) were last seen more than " + str(ACTIVE_WINDOW_DAYS)
                             + " days before the newest and are left out (staleDeviceCount).")
@@ -225,12 +248,13 @@ def transform(input):
                 + "%, online or not); the bar is " + str(DEPLOYED_THRESHOLD) + "%.")
         return create_response(
             result={key: ok, "totalCount": len(judged), "deployedCount": len(deployed),
-                    "coveragePercentage": pct, "staleDeviceCount": stale},
+                    "coveragePercentage": pct, "staleDeviceCount": stale, "unreadDeviceCount": unread},
             pass_reasons=[text] if ok else [],
             fail_reasons=[] if ok else [text],
             recommendations=[] if ok else ["Bring the unmonitored or removed devices back under Liongard monitoring."],
             additional_findings=findings,
-            input_summary={"listedDevices": len(devices), "judgedDevices": len(judged), "staleDeviceCount": stale},
+            input_summary={"listedDevices": len(devices), "judgedDevices": len(judged), "staleDeviceCount": stale,
+                           "unreadDeviceCount": unread},
             metadata=meta,
         )
     except Exception as e:

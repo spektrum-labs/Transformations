@@ -127,3 +127,29 @@ def test_dark_fleet_fails_logging():
     assert result["isEPPEnabled"] is True
     assert result["isEPPLoggingEnabled"] is False
     assert result["loggingExcludedStaleDevices"] == 2
+
+
+def test_active_machine_without_last_seen_never_passes_logging():
+    # Follow-up review of #1442: an Active machine with no lastSeen was judged and passed logging.
+    result = _result({"value": [
+        {"onboardingStatus": "Onboarded", "healthStatus": "Active", "osPlatform": "Windows11"},
+    ]})
+    assert result["isEPPLoggingEnabled"] is False
+    assert result["loggingJudgedDevices"] == 0 and result["loggingExcludedUndatedDevices"] == 1
+
+
+def test_machine_without_last_seen_is_left_out_and_reported():
+    result = _result({"value": [
+        {"onboardingStatus": "Onboarded", "healthStatus": "Active", "lastSeen": ago(1), "osPlatform": "Windows11"},
+        {"onboardingStatus": "Onboarded", "healthStatus": "Active", "lastSeen": "not a date", "osPlatform": "Windows11"},
+        {"onboardingStatus": "Onboarded", "healthStatus": "Active", "osPlatform": "Windows11"},
+    ]})
+    assert result["isEPPLoggingEnabled"] is True
+    assert result["loggingJudgedDevices"] == 1 and result["loggingExcludedUndatedDevices"] == 2
+    response = TRANSFORM.transform({"value": [
+        {"onboardingStatus": "Onboarded", "healthStatus": "Active", "lastSeen": ago(1), "osPlatform": "Windows11"},
+        {"onboardingStatus": "Onboarded", "healthStatus": "Active", "osPlatform": "Windows11"},
+    ]})
+    reasons = " ".join(response["additionalInfo"]["evaluation"]["passReasons"]
+                       + response["additionalInfo"]["evaluation"]["failReasons"])
+    assert "1 with no readable lastSeen" in reasons

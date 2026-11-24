@@ -109,3 +109,54 @@ def test_unreadable_is_not_evaluated(name, key, body):
     result, info = run(name, body)
     assert result[key] is None
     assert info["dataCollection"]["status"] == "error" and info["dataCollection"]["errors"]
+
+
+# ---- follow-up review of #1442: being listed is not evidence of deployment
+
+@pytest.mark.parametrize("agents", [[{}], [{"ID": 1, "Name": "agent-1"}], [{"Name": "a", "Status": None}],
+                                    [{"Name": "a", "Status": ""}]])
+def test_agents_without_readable_status_are_not_evaluated(agents):
+    # Reviewer's case: [{}] and an agent with no status read True after #1442 (False before).
+    result, info = run("isagentdeployed", {"data": agents})
+    assert result["isAgentDeployed"] is None
+    assert info["dataCollection"]["status"] == "error"
+
+
+@pytest.mark.parametrize("status", ["Failed", "Pending", "Error", "Unknown", "Inactive"])
+def test_agent_with_a_status_that_shows_no_install_is_not_deployed(status):
+    result, info = run("isagentdeployed", {"data": [agent(1, status=status)]})
+    assert result["isAgentDeployed"] is False
+    assert info["dataCollection"]["status"] == "success"
+
+
+def test_agents_without_status_count_against_and_are_reported():
+    agents = [agent(1), agent(2, status="Offline"), {"Name": "c"}, {"Name": "d", "LastHeartbeat": iso(0)}]
+    out = load("isagentdeployed")({"data": agents})
+    result = out["transformedResponse"]
+    assert result["isAgentDeployed"] is False
+    assert result["deployedAgents"] == 2 and result["unreadAgentCount"] == 2
+    assert any("unreadAgentCount" in f for f in out["additionalInfo"]["evaluation"]["additionalFindings"])
+
+
+def test_agent_installed_flag_is_positive_evidence():
+    result, _ = run("isagentdeployed", {"data": [{"Name": "a", "Installed": True}, {"Name": "b", "isInstalled": "true"}]})
+    assert result["isAgentDeployed"] is True
+    result, _ = run("isagentdeployed", {"data": [{"Name": "a", "Installed": False, "Status": "Online"}]})
+    assert result["isAgentDeployed"] is False
+
+
+@pytest.mark.parametrize("devices", [[{}], [{"id": "dev-1"}], [{"id": "dev-1", "status": None, "lastSeen": iso(0)}]])
+def test_devices_without_readable_status_are_not_evaluated(devices):
+    result, info = run("iseppdeployed", {"data": devices})
+    assert result["isEPPDeployed"] is None
+    assert info["dataCollection"]["status"] == "error"
+
+
+def test_devices_without_status_count_against_and_are_reported():
+    devices = [device(1), device(2), device(3), device(4), {"id": "dev-5"}]
+    out = load("iseppdeployed")({"data": devices})
+    result = out["transformedResponse"]
+    assert result["isEPPDeployed"] is True and result["coveragePercentage"] == 80.0
+    assert result["unreadDeviceCount"] == 1
+    failed = load("iseppdeployed")({"data": [device(1, status="Failed")]})["transformedResponse"]
+    assert failed["isEPPDeployed"] is False
