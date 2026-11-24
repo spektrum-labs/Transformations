@@ -1,0 +1,54 @@
+{
+  "name": "dastMediumSeverityIssuesCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of medium-severity issues across the scan targets of a DAST product, each target counted from its most recent successful scan.",
+  "valueType": "integer",
+  "unit": "count",
+  "domain": {
+    "min": 0
+  },
+  "population": "every scan target with a successful scan in a complete read of the successful-scan list (fewer than the 100 scans one read returns); the value is the sum of issue_counts.medium.total over each target's newest successful scan",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "A complete read (fewer than 100 successful scans, no GraphQL errors) in which every scan has status succeeded, a scan target id, a readable end time and an integer issue_counts.medium.total; 0 only when every target's newest successful scan reports 0. An empty list or a full page is not measured.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Application Security"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "openDecisions": [
+    {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "Should another DAST product (for example a different web application scanner) be allowed to answer this key, or should it stay with Burp Suite DAST until a second implementation is replayed?",
+      "positions": [
+        "any (registered): every Application Security integration may answer it, held to this definition.",
+        "listed: only Burp Suite DAST until a second product's implementation is replayed against real data."
+      ]
+    }
+  ],
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/devsecops/burpsuitedast/dastmediumseverityissuescount.py (reads Integration-Service method listCompletedScans: scans { status end_time scan_target { id } issue_counts { medium { total } } })",
+    "https://portswigger.net/burp/extensibility/dast/graphql-api/issuecounts.html (medium: the number of medium-severity issues found, by confidence; retrieved 2026-11-13)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-13",
+      "change": "Registered for the PortSwigger Burp Suite DAST checks. No live server read yet, so the key is proposed and V0."
+    }
+  ],
+  "notes": "Whether issue_counts leaves out issues marked false positive or accepted risk is not documented (UNVERIFIED)."
+}

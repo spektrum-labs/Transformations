@@ -1,0 +1,54 @@
+{
+  "name": "failedDASTScanTargetsCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of DAST scan targets whose most recent finished scan (succeeded, failed or cancelled) failed.",
+  "valueType": "integer",
+  "unit": "count",
+  "domain": {
+    "min": 0
+  },
+  "population": "every scan target with a finished scan in a complete read of the recent-scan list (fewer than the 100 scans one read returns), newest start time first; queued, running and paused scans are skipped",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "A complete read (fewer than 100 scans, no GraphQL errors) in which every scan has a known status and every finished scan a scan target id and readable start time; 0 only when no target's newest finished scan has status failed. No finished scan, or a full page, is not measured.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Application Security"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "openDecisions": [
+    {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "Should another DAST product (for example a different web application scanner) be allowed to answer this key, or should it stay with Burp Suite DAST until a second implementation is replayed?",
+      "positions": [
+        "any (registered): every Application Security integration may answer it, held to this definition.",
+        "listed: only Burp Suite DAST until a second product's implementation is replayed against real data."
+      ]
+    }
+  ],
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/devsecops/burpsuitedast/faileddastscantargetscount.py (reads Integration-Service method listRecentScans: scans(sort_column: start, sort_order: desc) { status start_time scan_target { id } scan_failure_message })",
+    "https://portswigger.net/burp/extensibility/dast/graphql-api/scanstatus.html (failed: the scan was unable to start or was unable to finish due to errors; retrieved 2026-11-13)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-13",
+      "change": "Registered for the PortSwigger Burp Suite DAST checks. No live server read yet, so the key is proposed and V0."
+    }
+  ],
+  "notes": "A target whose newest finished scan was cancelled is not counted and is reported in additionalFindings."
+}
