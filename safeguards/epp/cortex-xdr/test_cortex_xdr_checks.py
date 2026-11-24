@@ -62,3 +62,66 @@ def test_audit_log():
     assert t({"reply": {"total_count": 0, "result_count": 0, "data": []}})["isApiAuditLoggingEnabled"] is False
     for b in [{}, None, "{}", {"error": True}, {"reply": {}}]:
         assert t(b)["isApiAuditLoggingEnabled"] is None
+
+
+def listed(statuses):
+    return {"reply": {"total_count": len(statuses), "result_count": len(statuses),
+                      "endpoints": [{"endpoint_id": "ep-" + str(i), "endpoint_status": s} for i, s in enumerate(statuses)]}}
+
+
+def test_overnight_disconnected_endpoints_stay_covered():
+    """A run at night: most endpoints DISCONNECTED (asleep), a few LOST. Coverage counts all but LOST."""
+    t = load("requiredcoveragepercentage")
+    night = {"enrolled": body(200), "connected": body(60), "lost": body(4), "offline": body(140), "isolated": body(0)}
+    out = t(night)
+    assert out["requiredCoveragePercentage"] == 98.0
+    assert out["coveredEndpoints"] == 196 and out["lostEndpoints"] == 4
+    assert out["coverageBasis"] == "notLost"
+    assert "additionalInfo" not in out
+
+
+def test_lost_from_disconnected_step():
+    t = load("requiredcoveragepercentage")
+    out = t({"enrolled": body(100), "connected": body(30), "offline": body(70), "disconnected": body(50)})
+    assert out["requiredCoveragePercentage"] == 80.0
+    assert out["lostEndpoints"] == 20
+
+
+def test_lost_from_complete_offline_list():
+    t = load("requiredcoveragepercentage")
+    offline = listed(["DISCONNECTED"] * 7 + ["LOST"] * 3)
+    out = t({"enrolled": body(20), "connected": body(10), "offline": offline})
+    assert out["requiredCoveragePercentage"] == 85.0
+    assert out["lostEndpoints"] == 3 and out["coveredEndpoints"] == 17
+
+
+def test_no_offline_endpoints_is_full_coverage():
+    t = load("requiredcoveragepercentage")
+    out = t({"enrolled": body(12), "connected": body(12), "offline": body(0)})
+    assert out["requiredCoveragePercentage"] == 100.0
+    assert out["lostEndpoints"] == 0
+
+
+def test_all_lost_flips_low():
+    t = load("requiredcoveragepercentage")
+    out = t({"enrolled": body(10), "connected": body(2), "offline": body(8), "lost": body(8)})
+    assert out["requiredCoveragePercentage"] == 20.0
+
+
+def test_lost_unreadable_falls_back_to_connected():
+    """Offline list incomplete or statuses unreadable: the old connected/enrolled reading, labelled."""
+    t = load("requiredcoveragepercentage")
+    partial = {"reply": {"total_count": 10, "result_count": 2,
+                         "endpoints": [{"endpoint_status": "LOST"}, {"endpoint_status": "DISCONNECTED"}]}}
+    out = t({"enrolled": body(20), "connected": body(10), "offline": partial})
+    assert out["requiredCoveragePercentage"] == 50.0
+    assert out["coverageBasis"] == "connected" and "lostEndpoints" not in out
+    unlabelled = listed([None, "LOST"])
+    out = t({"enrolled": body(4), "connected": body(2), "offline": unlabelled})
+    assert out["coverageBasis"] == "connected"
+
+
+def test_inconsistent_lost_falls_back():
+    t = load("requiredcoveragepercentage")
+    out = t({"enrolled": body(10), "connected": body(8), "offline": body(2), "lost": body(5)})
+    assert out["coverageBasis"] == "connected" and out["requiredCoveragePercentage"] == 80.0
