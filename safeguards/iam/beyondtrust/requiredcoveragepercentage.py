@@ -6,6 +6,12 @@ Evaluates: What percentage of managed systems have at least one managed account
 import json
 from datetime import datetime
 
+# Pass when at least this share of managed systems has a managed account. Same value as
+# iam/beyondtrust-pra/requiredcoveragepercentage.py and
+# identity-and-access-management/beyondtrust/requiredCoveragePercentage.py. It was referenced
+# but never defined, so the line raised NameError and the check could not pass.
+COVERAGE_THRESHOLD = 80.0
+
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:

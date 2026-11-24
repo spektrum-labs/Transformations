@@ -6,6 +6,13 @@ Evaluates: Whether >= 80% of managed accounts have AutoManagementFlag set to Tru
 import json
 from datetime import datetime
 
+# Pass when at least this share of managed accounts has AutoManagementFlag set, as the
+# docstring states. Same value as the sibling BeyondTrust transforms
+# (iam/beyondtrust-pra/ispasswordautomanagementenabled.py and
+# identity-and-access-management/beyondtrust/). It was referenced but never defined, so the
+# line raised NameError and the check could not pass.
+COVERAGE_THRESHOLD = 80.0
+
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:

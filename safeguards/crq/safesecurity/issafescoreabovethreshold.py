@@ -6,6 +6,20 @@ Evaluates: Whether the organization's SAFE Score (overall risk posture grade)
 import json
 from datetime import datetime
 
+# Both thresholds were referenced but never defined, so every grade or likelihood the body
+# carried raised NameError and this check could never pass. Safe Security publishes no letter
+# bands or likelihood cut-offs, so both values below are deliberately strict choices.
+#
+# Letter grades that count as above threshold: B or better.
+ACCEPTABLE_GRADES = ("a", "b")
+# Highest acceptable annual breach likelihood, as a probability (0.10 == 10%).
+MAX_BREACH_LIKELIHOOD = 0.10
+# Only fields whose meaning is a breach likelihood (lower is better) are read as one. The old
+# fallback also read riskScore and overallScore, whose scale and direction are unknown -- the
+# SAFE Score itself runs 0 to 5 with HIGHER better, so a poor 1.5 would have read as "1.5%
+# likely" and passed.
+LIKELIHOOD_FIELDS = ("breachLikelihood", "likelihood")
+
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -52,22 +66,24 @@ def evaluate(data):
             return {
                 "isSAFEScoreAboveThreshold": result,
                 "safeGrade": grade.upper(),
-                "acceptableGrades": sorted(list(ACCEPTABLE_GRADES), reverse=True)
+                "acceptableGrades": [g.upper() for g in ACCEPTABLE_GRADES]
             }
 
         # Fallback: numeric breach likelihood check
-        breach_likelihood = data.get(
-            "breachLikelihood",
-            data.get("riskScore", data.get("likelihood", data.get("overallScore", None)))
-        )
+        breach_likelihood = None
+        for field in LIKELIHOOD_FIELDS:
+            if data.get(field) is not None:
+                breach_likelihood = data.get(field)
+                break
 
-        if breach_likelihood is not None:
+        if breach_likelihood is not None and not isinstance(breach_likelihood, bool):
             # Handle percentage form (e.g., 25.5) vs decimal form (e.g., 0.255)
             try:
                 likelihood_val = float(breach_likelihood)
                 if likelihood_val > 1.0:
                     likelihood_val = likelihood_val / 100.0  # Convert percentage to decimal
-                result = likelihood_val < MAX_BREACH_LIKELIHOOD
+                # A negative or over-100% value is not a probability; it proves nothing.
+                result = 0.0 <= likelihood_val <= 1.0 and likelihood_val < MAX_BREACH_LIKELIHOOD
                 return {
                     "isSAFEScoreAboveThreshold": result,
                     "breachLikelihood": round(likelihood_val, 4),

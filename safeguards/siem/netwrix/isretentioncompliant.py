@@ -4,7 +4,15 @@ Vendor: Netwrix  |  Category: SIEM
 Evaluates: Whether Netwrix Auditor retains audit data for at least 180 days
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone
+
+# Netwrix must still hold audit records at least this old (the docstring's 180 days).
+RETENTION_DAYS = 180
+
+# evaluate() used timezone without importing it, so any non-empty record list raised NameError
+# and the check could never pass. Once that line runs, the old code passed on ANY record --
+# including one written yesterday, or one with no readable timestamp -- so it now passes only
+# when the oldest readable record is itself at least RETENTION_DAYS old.
 
 
 def extract_input(input_data):
@@ -60,13 +68,13 @@ def evaluate(data):
                 "retentionDays": 0
             }
 
-        # If any records returned for the 180-day-old window, retention is compliant
+        # No records at all cannot show retention depth
         if len(records) == 0:
             return {
                 "isRetentionCompliant": False,
                 "reason": "No records found at 180-day retention boundary — retention may be less than required",
                 "retentionDays": 0,
-                "threshold": 180
+                "threshold": RETENTION_DAYS
             }
 
         # Find the oldest record timestamp to compute actual retention depth
@@ -88,19 +96,29 @@ def evaluate(data):
             except (ValueError, AttributeError):
                 continue
 
-        if oldest_timestamp:
-            age_days = (now - oldest_timestamp).days
-        else:
-            # Records exist but timestamps couldn't be parsed — still pass
-            age_days = 180
+        if oldest_timestamp is None:
+            return {
+                "isRetentionCompliant": False,
+                "reason": "No record carried a readable timestamp, so retention depth could not be shown",
+                "retentionDays": 0,
+                "recordsFoundAtBoundary": len(records),
+                "complianceThresholdDays": RETENTION_DAYS
+            }
 
-        return {
-            "isRetentionCompliant": True,
+        age_days = (now - oldest_timestamp).days
+        result = age_days >= RETENTION_DAYS
+
+        out = {
+            "isRetentionCompliant": result,
             "retentionDays": age_days,
             "recordsFoundAtBoundary": len(records),
-            "oldestRecordFound": oldest_timestamp.isoformat() if oldest_timestamp else None,
-            "complianceThresholdDays": 180
+            "oldestRecordFound": oldest_timestamp.isoformat(),
+            "complianceThresholdDays": RETENTION_DAYS
         }
+        if not result:
+            out["reason"] = (f"Oldest record returned is {age_days} day(s) old, under the "
+                             f"{RETENTION_DAYS}-day retention requirement")
+        return out
     except Exception as e:
         return {"isRetentionCompliant": False, "error": str(e)}
 

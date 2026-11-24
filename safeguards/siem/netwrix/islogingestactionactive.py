@@ -4,7 +4,11 @@ Vendor: Netwrix  |  Category: SIEM
 Evaluates: Whether Netwrix Auditor is actively ingesting log data by verifying
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+# evaluate() used timezone and timedelta without importing them, so any non-empty record list
+# raised NameError, and it returned its verdict under "isLogIngestionActive" while transform()
+# reads "isLogIngestActionActive". Either defect alone meant this check could never pass.
 
 
 def extract_input(input_data):
@@ -50,20 +54,23 @@ def evaluate(data):
 
         if not isinstance(records, list):
             return {
-                "isLogIngestionActive": False,
+                "isLogIngestActionActive": False,
                 "error": "ActivityRecordList not found or malformed",
                 "recordCount": 0
             }
 
         if len(records) == 0:
             return {
-                "isLogIngestionActive": False,
+                "isLogIngestActionActive": False,
                 "reason": "No activity records returned — ingestion may be stopped or unconfigured",
                 "recordCount": 0
             }
 
         # Check that at least one record has a recent timestamp (within 48 hours)
-        threshold = datetime.now(timezone.utc) - timedelta(hours=48)
+        now = datetime.now(timezone.utc)
+        threshold = now - timedelta(hours=48)
+        # A record stamped in the future (clock skew aside) is not evidence of ingestion now.
+        latest_allowed = now + timedelta(hours=1)
         latest_timestamp = None
         recent_count = 0
 
@@ -81,7 +88,7 @@ def evaluate(data):
                 if latest_timestamp is None or when_dt > latest_timestamp:
                     latest_timestamp = when_dt
 
-                if when_dt >= threshold:
+                if threshold <= when_dt <= latest_allowed:
                     recent_count += 1
             except (ValueError, AttributeError):
                 continue
@@ -89,7 +96,7 @@ def evaluate(data):
         result = recent_count > 0
 
         return {
-            "isLogIngestionActive": result,
+            "isLogIngestActionActive": result,
             "recordCount": len(records),
             "recentRecords": recent_count,
             "latestRecord": latest_timestamp.isoformat() if latest_timestamp else None,

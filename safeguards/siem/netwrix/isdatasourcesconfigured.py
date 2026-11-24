@@ -6,6 +6,28 @@ Evaluates: Whether Netwrix Auditor is configured to monitor multiple distinct
 import json
 from datetime import datetime
 
+# Both names below were referenced but never defined, so any non-empty record list raised
+# NameError and the check could never pass.
+
+# "Multiple distinct" data sources, per the docstring: one source is not multiple.
+MIN_DATA_SOURCES = 2
+
+# Diagnostics only -- this never changes the verdict. Groups the DataSource names Netwrix
+# Auditor writes on activity records (its monitored systems, e.g. "Active Directory",
+# "Exchange Online", "Windows File Servers") into categories for categoriesFound. The first
+# category whose keyword appears in the lower-cased name wins, so the order matters:
+# "windows file servers" is file storage, not "windows server" infrastructure.
+KNOWN_DATA_SOURCES = {
+    "identity": ("active directory", "entra", "azure ad", "group policy", "logon activity"),
+    "email": ("exchange",),
+    "collaboration": ("sharepoint", "teams", "onedrive"),
+    "fileStorage": ("file server", "netapp", "emc", "nutanix", "synology", "qumulo"),
+    "database": ("sql server", "oracle"),
+    "infrastructure": ("vmware", "windows server"),
+    "network": ("network device",),
+    "userActivity": ("user activity",),
+}
+
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:

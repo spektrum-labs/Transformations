@@ -159,6 +159,20 @@ jobs:
       - name: Every transform must compile in the production sandbox
         run: python tools/check_sandbox_compile.py
 
+      # Compiling is not running. A name nothing defines -- a threshold
+      # constant, a helper, `timezone` after importing only `datetime`, or a builtin the
+      # sandbox leaves out such as `bytearray` -- compiles cleanly and raises NameError on the
+      # line that reads it. The transform's own `except Exception` turns that into a verdict
+      # that can never pass, and every gate above stays green because their no-evidence bodies
+      # return before that line. Measured 2026-11-24 on develop: 11 transforms, 13 names. The
+      # provided names are read from tools/restricted_sandbox.py, not hand-kept; the self-test
+      # executes each planted defect there to prove it really raises.
+      - name: Sandbox-names checker self-test
+        run: python tools/check_sandbox_names.py --self-test
+
+      - name: Every global name a transform reads must exist in the production sandbox
+        run: python tools/check_sandbox_names.py
+
       # The sixth contract: every criteria key a transform emits is defined, once, in
       # contracts/criteria-registry/keys/. #1069 shipped the checker and the registry but
       # wired neither into this workflow, and the gap was measured within two days: on
