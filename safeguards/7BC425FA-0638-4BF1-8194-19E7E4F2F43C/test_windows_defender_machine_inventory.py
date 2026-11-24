@@ -145,6 +145,42 @@ def test_logging_fails_when_a_reporting_sensor_is_not_active(loader):
 
 
 @pytest.mark.parametrize("loader", RUNNERS)
+def test_logging_leaves_out_dormant_inactive_machines(loader):
+    """An idle phone or a shelved laptop reads healthStatus Inactive: dormant, not a broken sensor."""
+    fleet = machines(machine(), machine(days_ago=2), machine(health="Inactive", days_ago=9, os_platform="iOS"),
+                     machine(health="Inactive", days_ago=13))
+    out = loader("epp_transform")(fleet)
+    tr = out["transformedResponse"]
+    assert tr["isEPPLoggingEnabled"] is True
+    assert tr["loggingJudgedDevices"] == 2 and tr["loggingExcludedInactiveDevices"] == 2
+    assert collected(out) == "success"
+    assert any("dormant" in f for f in out["additionalInfo"]["evaluation"]["additionalFindings"])
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_logging_leaves_out_machines_stale_against_the_newest(loader):
+    out = loader("epp_transform")(machines(machine(), machine(health="NoSensorData", days_ago=40)))
+    assert out["transformedResponse"]["isEPPLoggingEnabled"] is True
+    assert out["transformedResponse"]["loggingExcludedStaleDevices"] == 1
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_logging_still_fails_on_a_recent_unhealthy_sensor_beside_a_dormant_one(loader):
+    out = loader("epp_transform")(machines(machine(), machine(health="NoSensorData", days_ago=3),
+                                           machine(health="Inactive", days_ago=10)))
+    assert out["transformedResponse"]["isEPPLoggingEnabled"] is False
+    assert out["transformedResponse"]["isEPPDeployed"] is True
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_logging_fails_when_every_onboarded_machine_is_dormant(loader):
+    out = loader("epp_transform")(machines(machine(health="Inactive", days_ago=8), machine(health="Inactive", days_ago=9)))
+    assert out["transformedResponse"]["isEPPDeployed"] is True
+    assert out["transformedResponse"]["isEPPLoggingEnabled"] is False
+    assert collected(out) == "success"
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
 @pytest.mark.parametrize("body", NO_EVIDENCE)
 def test_epp_is_not_measured_without_evidence(loader, body):
     out = loader("epp_transform")(body())
