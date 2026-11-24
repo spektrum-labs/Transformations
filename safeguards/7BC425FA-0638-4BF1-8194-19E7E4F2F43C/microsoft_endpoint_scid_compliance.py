@@ -20,7 +20,12 @@ applicable device is not. The compliant share is also returned as a whole-number
 IsCompliant / IsApplicable arrive as SByte strings ("1", "0", "None") or booleans.
 
 Not evaluated (dataCollection error, values None): an error or unrecognised body, rows for an
-unexpected SCID, or no applicable device. This query sees only the assessment table, never the machine
+unexpected SCID, no applicable device, or an applicable device whose IsCompliant cannot be read (null,
+"None", missing) while no readable device is non-compliant. An unreadable state used to count as
+non-compliant, so a null tamper state read as "tamper protection off"; it shows nothing either way. A
+readable non-compliant device still fails the check whatever the unreadable rows say, and the unreadable
+rows are counted (tamperProtectionUnreadableDevices / realTimeProtectionUnreadableDevices). The status is
+one flag for the whole response, so when any check is not evaluated every value is None. This query sees only the assessment table, never the machine
 list, so an empty assessment cannot show that Defender for Endpoint protects 0 devices (it may also mean
 the assessment has not run); the reason says exactly what the assessment returned and nothing more.
 Device coverage, including "0 onboarded devices", is reported by the deployment and coverage checks.
@@ -33,6 +38,12 @@ from datetime import datetime
 SCIDS = {
     "scid-2003": ("isTamperProtectionEnabled", "tamperProtectionCompliancePercentage", "tamper protection"),
     "scid-2012": ("isRealTimeProtectionEnabled", "realTimeProtectionCompliancePercentage", "real-time protection"),
+}
+
+#: Per-SCID count of applicable rows whose IsCompliant cannot be read.
+UNREADABLE_KEYS = {
+    "scid-2003": "tamperProtectionUnreadableDevices",
+    "scid-2012": "realTimeProtectionUnreadableDevices",
 }
 
 #: Ids the methods used to query by mistake, and what they really measure.
@@ -48,6 +59,15 @@ def flag(value):
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return value == 1
     return isinstance(value, str) and value.strip().lower() in ("1", "true")
+
+
+def readable(value):
+    """True when a compliance flag carries a state: a bool, 1/0, or "1"/"0"/"true"/"false" (not null, not "None")."""
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, (int, float)):
+        return value in (0, 1)
+    return isinstance(value, str) and value.strip().lower() in ("1", "0", "true", "false")
 
 
 def extract_input(value):
@@ -128,9 +148,13 @@ def measure(data):
     for scid in SCIDS:
         assessed = [row for row in rows if row.get("ConfigurationId") == scid]
         applicable = [row for row in assessed if flag(row.get("IsApplicable"))]
+        unreadable = [row for row in applicable if not readable(row.get("IsCompliant"))]
+        applicable = [row for row in applicable if readable(row.get("IsCompliant"))]
         compliant = [row for row in applicable if flag(row.get("IsCompliant"))]
-        counts[scid] = (len(compliant), len(applicable), len(assessed))
-        if applicable:
+        counts[scid] = (len(compliant), len(applicable), len(assessed), len(unreadable))
+        if assessed:
+            result[UNREADABLE_KEYS[scid]] = len(unreadable)
+        if applicable and (unreadable == [] or len(compliant) < len(applicable)):
             result[SCIDS[scid][0]] = len(compliant) == len(applicable)
             result[SCIDS[scid][1]] = (len(compliant) * 100) // len(applicable)
     return result, counts
@@ -144,16 +168,29 @@ def transform(input):
         result, counts = measure(data)
         passed = []
         failed = []
+        errors = []
         for scid in SCIDS:
-            if counts[scid][1]:
+            if counts[scid][3] and result[SCIDS[scid][0]] is None:
+                errors.append(str(counts[scid][3]) + " applicable device(s) report no readable " + SCIDS[scid][2]
+                              + " state (IsCompliant null or missing) for " + scid + ", and no readable device is "
+                              "non-compliant, so " + SCIDS[scid][2] + " cannot be read for every device")
+            elif counts[scid][1]:
                 line = f"{counts[scid][0]} of {counts[scid][1]} applicable devices have {SCIDS[scid][2]} on ({scid})"
+                if counts[scid][3]:
+                    line = line + f"; {counts[scid][3]} more report no readable state and are left out"
                 if counts[scid][0] == counts[scid][1]:
                     passed.append(line)
                 else:
                     failed.append(line)
+        if errors:
+            # One status flag covers every key in the response: none is reported once any is not evaluated.
+            for scid in SCIDS:
+                result[SCIDS[scid][0]] = None
+                result[SCIDS[scid][1]] = None
+            passed = []
+            failed = []
         lines = passed + failed
-        errors = []
-        if not lines:
+        if not lines and not errors:
             for scid in SCIDS:
                 if counts[scid][2]:
                     errors.append("Defender for Endpoint's secure-configuration assessment lists " + str(counts[scid][2])
