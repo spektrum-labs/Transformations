@@ -32,6 +32,11 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    if not api_errors and None in result.values():
+        # A criterion left as None was not measured; say so where the evaluator reads it.
+        api_errors = [NOT_EVIDENCED_REASON]
+        fail_reasons = [NOT_EVIDENCED_REASON]
+        recommendations = []
     return {
         "transformedResponse": result,
         "additionalInfo": {
@@ -97,12 +102,14 @@ def transform(input):
         # Check for SAML/SSO enforcement
         is_saml_enforced = False
         if isinstance(data, dict):
-            is_saml_enforced = (
-                data.get('isSAMLEnforced', default_value) or
-                data.get('samlEnabled', default_value) or
-                data.get('ssoEnabled', default_value) or
-                data.get('sso', {}).get('enforced', default_value)
-            )
+            # An explicit setting decides on its own. The helper's None ("no evidence") is
+            # only the answer when the body names none of them, so an explicit OFF stays a
+            # measured fail instead of turning into Not evaluated.
+            explicit = [data[k] for k in ("isSAMLEnforced", "samlEnabled", "ssoEnabled") if k in data]
+            sso = data.get("sso")
+            if isinstance(sso, dict) and "enforced" in sso:
+                explicit.append(sso["enforced"])
+            is_saml_enforced = any(v is True for v in explicit) if explicit else default_value
 
         if is_saml_enforced:
             pass_reasons.append("SAML/SSO is enforced for Datto BCDR portal access")
@@ -128,19 +135,30 @@ def transform(input):
         )
 
 
+NOT_EVIDENCED_REASON = (
+    "Not evaluated: the response carries no evidence for this criterion. A status field, an "
+    "HTTP code or a list of records on its own only shows that the call succeeded."
+)
+
+
 def affirmative_signal(data):
-    """True only when the payload POSITIVELY evidences the control.
+    """What the payload says about this criterion: True, False, or None when it does not say.
 
     Replaces `data is not None`, which asked whether a response arrived rather than what
     it said -- so any 2xx body, including one describing the control as OFF, satisfied the
     criterion and no input could ever make it false. Measured 2026-09-21.
 
-    Deliberately conservative, in this order:
-      * an unreadable, empty or error body           -> False
-      * an explicit OFF among the recognised keys    -> False   (beats any other signal)
-      * an explicit ON among the recognised keys     -> True
-      * a non-empty population of records/settings   -> True
-      * anything unrecognised                        -> False  (never True by default)
+    A generic `status` or `state`, an HTTP code or a populated list shows only that the call
+    succeeded, so it can veto but never assert. Measured 2026-11-17: this helper returned True
+    for {"status": "ok"}, {"status": 200} and any non-empty list, including the stub the
+    evaluation service substitutes for an empty or non-JSON 2xx body ({"status": "Success"}).
+
+    In this order:
+      * an unreadable, empty or error body                    -> False
+      * an explicit OFF, in a setting key or in status/state  -> False   (beats any other signal)
+      * an explicit ON in a setting key                       -> True
+      * an empty collection                                   -> False
+      * anything else                                         -> None    (Not evaluated)
     """
     if isinstance(data, list):
         # A top-level JSON array is a population of records, as {"items": [...]} already is,
@@ -155,12 +173,14 @@ def affirmative_signal(data):
         if data.get(key):
             return False
     on_keys = ("enabled", "isEnabled", "active", "isActive", "configured", "isConfigured",
-               "enforced", "isEnforced", "loggingEnabled", "status", "state", "licensed",
-               "licensePurchased", "subscribed", "subscription")
+               "enforced", "isEnforced", "loggingEnabled", "licensed", "licensePurchased",
+               "subscribed", "subscription")
     present = [data[k] for k in on_keys if k in data]
+    # `status` and `state` describe the call as often as the control: they may veto, never assert.
+    reported = present + [data[k] for k in ("status", "state") if k in data]
     off_words = ("false", "disabled", "off", "inactive", "none", "expired", "cancelled")
     on_words = ("true", "enabled", "on", "active", "success", "ok", "valid", "licensed")
-    for value in present:
+    for value in reported:
         if value is False:
             return False
         if isinstance(value, str) and value.strip().lower() in off_words:
@@ -175,8 +195,6 @@ def affirmative_signal(data):
     for key in ("value", "items", "data", "records", "results", "logs", "events", "policies",
                 "settings", "configurations", "devices", "agents", "users", "licenses"):
         value = data.get(key)
-        if isinstance(value, list) and value:
-            return True
-        if isinstance(value, dict) and value:
-            return True
-    return False
+        if isinstance(value, (list, dict)) and not value:
+            return False
+    return None
