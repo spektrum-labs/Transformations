@@ -4,7 +4,7 @@
   "generated_by": "tools/check_criteria_registry.py --emit-allowlist",
   "how_to_shrink": "register the key (contracts/criteria-registry/keys/<key>.json) with what is evidenced and \"unknown\" for what is not, or stop emitting it. Never add to this list by hand.",
   "count": {
-    "unregistered": 1510,
+    "unregistered": 1508,
     "type": 0
   },
   "unregistered": [
@@ -1304,7 +1304,6 @@
     "safeguards/mfa/pingfederate/isauthpolicyenabled.py::isAuthPolicyEnabled",
     "safeguards/mfa/pingfederate/islegacyauthblocked.py::isLegacyAuthBlocked",
     "safeguards/mfa/pingfederate/ismfaenforced.py::isMFAEnforced",
-    "safeguards/mfa/pingfederate/ismfaenforced.py::isMFAEnforcedForUsers",
     "safeguards/mfa/pingfederate/ismfaenforced_admins.py::isMFAEnforcedAdmins",
     "safeguards/mobile-security/lookout/isCorporateOwned.py::isCorporateOwned",
     "safeguards/mobile-security/lookout/isDeviceEncrypted.py::isDeviceEncrypted",
@@ -1431,7 +1430,6 @@
     "safeguards/siem/netwrix/isincidentworkflowconfigured.py::isIncidentWorkflowConfigured",
     "safeguards/siem/netwrix/isincidentworkflowconfigured.py::workflowActionCount",
     "safeguards/siem/netwrix/islogingestactionactive.py::isLogIngestActionActive",
-    "safeguards/siem/netwrix/islogingestactionactive.py::isLogIngestionActive",
     "safeguards/siem/netwrix/islogingestactionactive.py::recordCount",
     "safeguards/siem/netwrix/isretentioncompliant.py::isRetentionCompliant",
     "safeguards/siem/netwrix/isretentioncompliant.py::retentionDays",

@@ -12,9 +12,9 @@ class IssafescoreabovethresholdInput(BaseModel):
     score: Optional[str] = Field(None, description="Alternate field for the score value")
     scoreGrade: Optional[str] = Field(None, description="Alternate field for the score grade")
     breachLikelihood: Optional[Union[float, str]] = Field(None, description="Numeric breach likelihood as percentage or decimal")
-    riskScore: Optional[Union[float, str]] = Field(None, description="Alternate numeric risk score field")
+    riskScore: Optional[Union[float, str]] = Field(None, description="Not read: scale and direction unknown, so it is not treated as a breach likelihood")
     likelihood: Optional[Union[float, str]] = Field(None, description="Alternate likelihood field")
-    overallScore: Optional[Union[float, str]] = Field(None, description="Alternate overall score field")
+    overallScore: Optional[Union[float, str]] = Field(None, description="Not read: scale and direction unknown, so it is not treated as a breach likelihood")
 
     class Config:
         extra = "allow"

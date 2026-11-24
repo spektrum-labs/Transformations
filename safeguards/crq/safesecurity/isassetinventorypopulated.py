@@ -6,6 +6,12 @@ Evaluates: Whether the SAFE asset inventory is meaningfully populated with
 import json
 from datetime import datetime
 
+# The inventory counts as populated once SAFE reports at least this many assets: an empty
+# inventory is the failure this check exists to find, and any higher floor would be a guess
+# about the customer's size. It was referenced but never defined, so the comparison raised
+# NameError and the check could not pass.
+MINIMUM_ASSET_THRESHOLD = 1
+
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -48,6 +54,9 @@ def evaluate(data):
         # Use totalCount (reflects full paginated dataset) in preference to
         # the current page's values length, which may be a subset.
         total_count = data.get("totalCount", data.get("size", 0))
+        # Only a real count is evidence: a bool, string or null proves nothing.
+        if isinstance(total_count, bool) or not isinstance(total_count, (int, float)):
+            total_count = 0
 
         # Fallback: if totalCount absent, count values in this page
         # (Note: may undercount for paginated responses — prefer totalCount)

@@ -4,7 +4,13 @@ Vendor: Safe Security  |  Category: Cyber Risk Quantification
 Evaluates: Whether the SAFE One platform is actively tracking and surfacing
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+# A critical finding updated within this many days shows SAFE is still surfacing findings
+# rather than holding a stale import. timezone, timedelta and this constant were all used but
+# never defined or imported (NameError), and evaluate() never returned its result, so
+# transform() read None and this check could never pass.
+RECENCY_THRESHOLD_DAYS = 30
 
 
 def extract_input(input_data):
@@ -63,26 +69,46 @@ def evaluate(data):
         # Check recency: is the latest finding updated within threshold?
         most_recent_dt = None
         for finding in findings:
+            if not isinstance(finding, dict):
+                continue
             for ts_field in ("updatedAt", "lastUpdated", "assessedAt", "createdAt"):
                 ts_val = finding.get(ts_field)
                 if ts_val:
                     try:
                         dt = datetime.fromisoformat(str(ts_val).replace("Z", "+00:00"))
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
                         if most_recent_dt is None or dt > most_recent_dt:
                             most_recent_dt = dt
                     except ValueError:
                         continue
                     break
 
-        if most_recent_dt is not None:
-            threshold = datetime.now(timezone.utc) - timedelta(days=RECENCY_THRESHOLD_DAYS)
-            is_recent = most_recent_dt >= threshold
-        else:
-            # No timestamps found in findings — accept presence as sufficient
-            is_recent = True
+        reported_count = total_count if isinstance(total_count, int) and not isinstance(total_count, bool) \
+            and total_count > 0 else len(findings)
 
-        reported_count = total_count if total_count > 0 else len(findings)
+        if most_recent_dt is None:
+            # Without a readable timestamp the body cannot show the findings are current.
+            return {
+                "isCriticalFindingsMonitored": False,
+                "reason": "No critical finding carried a readable timestamp, so recency could not be shown",
+                "criticalFindingCount": reported_count,
+                "recencyThresholdDays": RECENCY_THRESHOLD_DAYS
+            }
+
+        threshold = datetime.now(timezone.utc) - timedelta(days=RECENCY_THRESHOLD_DAYS)
+        is_recent = most_recent_dt >= threshold
         result = reported_count >= 1 and is_recent
+        out = {
+            "isCriticalFindingsMonitored": result,
+            "criticalFindingCount": reported_count,
+            "mostRecentFindingUpdate": most_recent_dt.isoformat(),
+            "recencyThresholdDays": RECENCY_THRESHOLD_DAYS
+        }
+        if not is_recent:
+            out["reason"] = (f"The most recent critical finding was updated more than "
+                             f"{RECENCY_THRESHOLD_DAYS} days ago")
+        return out
     except Exception as e:
         return {"isCriticalFindingsMonitored": False, "error": str(e)}
 

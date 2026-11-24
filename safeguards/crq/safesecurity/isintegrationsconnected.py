@@ -6,6 +6,11 @@ Evaluates: Whether at least one security integration is actively connected
 import json
 from datetime import datetime
 
+# "At least one security integration is actively connected", per the docstring. It was
+# referenced but never defined (NameError), and evaluate() never returned its result, so
+# transform() read None and this check could never pass.
+MINIMUM_ACTIVE_INTEGRATIONS = 1
+
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -51,7 +56,9 @@ def evaluate(data):
 
         if not isinstance(integrations, list):
             # If top-level response IS the integration object directly
-            if isinstance(data, dict) and data.get("status"):
+            # Only an object that names an integration counts; a bare {"status": ...} envelope
+            # is the API describing the request, not an integration.
+            if isinstance(data, dict) and data.get("status") and (data.get("id") or data.get("name")):
                 integrations = [data]
             else:
                 return {"isIntegrationsConnected": False, "error": "Unexpected integrations response structure"}
@@ -60,10 +67,16 @@ def evaluate(data):
         active_states = {"active", "connected", "syncing", "enabled", "running"}
         active_integrations = [
             i for i in integrations
-            if str(i.get("status", i.get("syncStatus", i.get("state", "")))).lower() in active_states
+            if isinstance(i, dict) and str(i.get("status", i.get("syncStatus", i.get("state", "")))).lower() in active_states
         ]
 
         result = len(active_integrations) >= MINIMUM_ACTIVE_INTEGRATIONS
+        return {
+            "isIntegrationsConnected": result,
+            "activeIntegrations": len(active_integrations),
+            "integrationsReturned": len(integrations),
+            "minimumRequired": MINIMUM_ACTIVE_INTEGRATIONS,
+        }
     except Exception as e:
         return {"isIntegrationsConnected": False, "error": str(e)}
 
