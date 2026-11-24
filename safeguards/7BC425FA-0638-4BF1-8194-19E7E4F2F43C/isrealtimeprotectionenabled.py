@@ -11,9 +11,25 @@ Permission: AdvancedQuery.Read.All
 
 scid-2011 is "Update Microsoft Defender Antivirus definitions", NOT real-time protection (that is scid-2012);
 this file counts whatever rows its method returns, so the method query decides what is measured.
+
+realTimeProtectionCompliancePercentage: floor(100 * protected / applicable), the same key and rounding the
+One-Click file (microsoft_endpoint_scid_compliance.py) returns, so one requirement bar reads both. An
+applicable device whose state cannot be read (IsCompliant / avMode null, "None" or missing) stays in the
+denominator and never counts as protected, so the share can only understate coverage.
+
+isRealTimeProtectionEnabled keeps its old meaning (true when at least one applicable device is protected);
+requirements that need fleet coverage read the percentage instead.
+
+Not evaluated (both values None, dataCollection status "error", with the reason): an empty or unrecognised
+body, no applicable device with a readable state, rows for a configuration other than scid-2012, or a
+transformation error. Never False: those bodies show nothing about whether protection is on.
 """
 import json
 from datetime import datetime
+
+#: Whole-number share (rounded down) of applicable devices with real-time protection on. The bar lives in the
+#: requirement; isRealTimeProtectionEnabled below keeps its old meaning.
+PERCENT_KEY = "realTimeProtectionCompliancePercentage"
 
 
 def extract_input(input_data):
@@ -60,6 +76,28 @@ def to_bool(val):
     return bool(val)
 
 
+def read_flag(val):
+    """True / False from a boolean-ish compliance state, or None when the state is unreadable (null, "None", other)."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return True if val == 1 else (False if val == 0 else None)
+    if isinstance(val, str):
+        text = val.strip().lower()
+        if text in ("true", "1", "yes"):
+            return True
+        if text in ("false", "0", "no"):
+            return False
+    return None
+
+
+def read_av_mode(val):
+    """True / False from a machines-API avMode, or None when it is missing or empty."""
+    if val is None or (isinstance(val, str) and not val.strip()):
+        return None
+    return str(val).strip().lower() in ("active", "sensorenabled")
+
+
 def extract_devices(data):
     """Extract device records from Advanced Hunting or legacy response formats."""
     if isinstance(data, dict):
@@ -81,57 +119,63 @@ def evaluate(data):
     Supports two response formats:
     1. Advanced Hunting (scid-2012): IsCompliant field per device
     2. Legacy machines API: avMode field per device
+
+    Returns {PERCENT_KEY: None, "error": reason} when no applicable device's state can be read.
     """
-    try:
-        devices = extract_devices(data)
+    devices = extract_devices(data)
+    if not devices:
+        return {"isRealTimeProtectionEnabled": None, PERCENT_KEY: None,
+                "error": "The response lists no device, so real-time protection cannot be read"}
 
-        if not devices:
-            return {"isRealTimeProtectionEnabled": False, "error": "No devices found"}
+    total = 0
+    protected = 0
+    unreadable = 0
+    non_compliant_devices = []
 
-        total = 0
-        protected = 0
-        non_compliant_devices = []
+    for device in devices:
+        if not isinstance(device, dict):
+            continue
 
-        for device in devices:
-            if not isinstance(device, dict):
+        device_name = device.get("DeviceName") or device.get("computerDnsName") or "Unknown"
+
+        # Advanced Hunting format (scid-2012): IsCompliant
+        if "IsCompliant" in device:
+            if not to_bool(device.get("IsApplicable", True)):
                 continue
+            state = read_flag(device.get("IsCompliant"))
+        # Legacy machines API format: avMode
+        elif "avMode" in device:
+            state = read_av_mode(device.get("avMode"))
+        else:
+            continue
+        if state is None:
+            unreadable += 1
+            continue
+        total += 1
+        if state:
+            protected += 1
+        else:
+            non_compliant_devices.append(device_name)
 
-            device_name = device.get("DeviceName") or device.get("computerDnsName") or "Unknown"
+    if total == 0:
+        if unreadable:
+            reason = (str(unreadable) + " applicable device(s) report no readable real-time protection state "
+                      "(null or missing), so real-time protection cannot be read")
+        else:
+            reason = "No applicable device carries real-time protection data, so real-time protection cannot be read"
+        return {"isRealTimeProtectionEnabled": None, PERCENT_KEY: None, "unreadableDevices": unreadable,
+                "error": reason}
 
-            # Advanced Hunting format (scid-2012): IsCompliant
-            if "IsCompliant" in device:
-                is_applicable = to_bool(device.get("IsApplicable", True))
-                if not is_applicable:
-                    continue
-                total += 1
-                if to_bool(device.get("IsCompliant", False)):
-                    protected += 1
-                else:
-                    non_compliant_devices.append(device_name)
-            # Legacy machines API format: avMode
-            elif "avMode" in device:
-                total += 1
-                if device.get("avMode", "") in ("Active", "active", "SensorEnabled"):
-                    protected += 1
-                else:
-                    non_compliant_devices.append(device_name)
-            else:
-                continue
-
-        if total == 0:
-            return {"isRealTimeProtectionEnabled": False, "error": "No applicable devices found with real-time protection data"}
-
-        score = round((protected / total) * 100, 2)
-
-        return {
-            "isRealTimeProtectionEnabled": protected > 0,
-            "scoreInPercentage": score,
-            "totalDevices": total,
-            "realTimeProtectedCount": protected,
-            "nonCompliantDevices": non_compliant_devices[:20]
-        }
-    except Exception as e:
-        return {"isRealTimeProtectionEnabled": False, "error": str(e)}
+    return {
+        "isRealTimeProtectionEnabled": protected > 0,
+        # Unreadable devices stay in the denominator and never count as protected, so the share is a floor.
+        PERCENT_KEY: (protected * 100) // (total + unreadable),
+        "scoreInPercentage": round((protected / total) * 100, 2),
+        "totalDevices": total,
+        "realTimeProtectedCount": protected,
+        "unreadableDevices": unreadable,
+        "nonCompliantDevices": non_compliant_devices[:20]
+    }
 
 
 #: The id the method used to query by mistake, and what it really measures. Its rows are not evidence for this
@@ -171,7 +215,7 @@ def transform(input):
             reason = ("The query read a configuration other than " + EXPECTED_SCID + " (for example " + RETIRED_SCID + ", Defender Antivirus definitions up to date), not real-time protection (scid-2012), so "
                       "these rows are not evidence for this check")
             return create_response(
-                result={criteriaKey: None},
+                result={criteriaKey: None, PERCENT_KEY: None},
                 validation=validation,
                 fail_reasons=[reason],
                 recommendations=["Point the Windows Defender method at scid-2012 (real-time protection)"],
@@ -179,8 +223,18 @@ def transform(input):
             )
 
         eval_result = evaluate(data)
-        result_value = eval_result.get(criteriaKey, False)
+        result_value = eval_result.get(criteriaKey)
         extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
+
+        if result_value is None:
+            reason = eval_result.get("error") or "Real-time protection state could not be read"
+            return create_response(
+                result={criteriaKey: None, **extra_fields},
+                validation=validation,
+                fail_reasons=[reason],
+                api_errors=[reason],
+                input_summary={criteriaKey: None, **extra_fields},
+            )
 
         pass_reasons = []
         fail_reasons = []
@@ -192,8 +246,6 @@ def transform(input):
                 pass_reasons.append(f"{k}: {v}")
         else:
             fail_reasons.append(f"{criteriaKey} check failed")
-            if "error" in eval_result:
-                fail_reasons.append(eval_result["error"])
             recommendations.append("Enable real-time protection on all devices via Microsoft Defender for Endpoint")
 
         return create_response(
@@ -205,9 +257,11 @@ def transform(input):
             input_summary={criteriaKey: result_value, **extra_fields}
         )
     except Exception as e:
+        reason = f"Transformation error: {str(e)}"
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None, PERCENT_KEY: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=[reason],
+            api_errors=[reason]
         )
