@@ -24,11 +24,14 @@ class AreadminaccountsseparateInput(BaseModel):
                        [,assignedPlans]&$top=999
     directoryRoles (GET /v1.0/directoryRoles?$expand=members) is accepted in place of
     roleAssignments. Microsoft Secure Score bodies are rejected as not evidence.
+    roleEligibilityScheduleInstances (optional; GET /v1.0/roleManagement/directory/
+    roleEligibilityScheduleInstances, every page read) adds the PIM-eligible role holders.
     """
 
     roleAssignments: Optional[GraphListBody] = None
     directoryRoles: Optional[GraphListBody] = None
     users: Optional[GraphListBody] = None
+    roleEligibilityScheduleInstances: Optional[Any] = None
 
     class Config:
         extra = "allow"

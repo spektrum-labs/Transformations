@@ -17,10 +17,19 @@ is not evaluated, never a measured fail. So is a partial read: a page with an @o
 (role assignments, directory roles, their members or users) cannot show that no other admin
 holds a mailbox, and an administrator whose own row has no assignedLicenses list (missing or
 null) was never checked for a licence. Neither can read as a pass.
+
+PIM-eligible admins: roleAssignments holds ACTIVE assignments only. When the workflow also merges
+"roleEligibilityScheduleInstances" (GET /v1.0/roleManagement/directory/roleEligibilityScheduleInstances,
+every page read), the principals of the instances in effect now that hold a PRIVILEGED_ROLE_IDS role join
+the admin population, and the result reports activeAdminCount and eligibleAdminCount (a holder of both is in
+both; adminCount is the distinct total). An eligible group, like an active one, is not in the user feed and
+stays unresolved. Without that key the verdict is what it was and eligibleAssignmentsRead is false; with the
+key present but not read whole (an error or vendor error as data, an @odata.nextLink) the read is partial,
+exactly like a truncated role-assignment read.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def extract_input(input_data):
@@ -243,6 +252,140 @@ def collect_admin_principal_ids(data, users):
     return admin_ids
 
 
+# ----------------------------------------------------------------------------- PIM-eligible role holders
+# A tenant that uses Privileged Identity Management (PIM) holds admin roles as ELIGIBLE assignments, which
+# GET /roleManagement/directory/roleAssignments (ACTIVE assignments only) does not return. When the workflow also
+# merges GET /v1.0/roleManagement/directory/roleEligibilityScheduleInstances (every page read) under ELIGIBLE_KEY,
+# its principals join the admin population (RoleEligibilitySchedule.Read.Directory or RoleManagement.Read.Directory;
+# Entra ID P2 for PIM). Key absent (workflow not updated, or no P2): behaviour is unchanged and the output says
+# eligibleAssignmentsRead false. Key present but not read whole (an error or vendor error returned as data, an
+# @odata.nextLink still set, a truncation marker, a body that is not a list): the admin population is incomplete.
+ELIGIBLE_KEY = "roleEligibilityScheduleInstances"
+ELIGIBLE_ENDPOINT = "GET /v1.0/roleManagement/directory/roleEligibilityScheduleInstances"
+ELIGIBLE_WRAPPERS = ["api_response", "apiResponse", "response", "result", "Output", "rawResponse", "data"]
+ELIGIBLE_NOT_READ = ("PIM-eligible role assignments were not read (no " + ELIGIBLE_KEY + " in the input), so "
+                     "administrators who hold a privileged role only through PIM eligibility are not in this result")
+
+
+def eligibility_time(value):
+    """A UTC datetime from Graph's ISO 8601 text ('2026-01-01T00:00:00Z', optional fraction), else None."""
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if len(raw) < 19 or raw[10] not in ("T", "t", " "):
+        return None
+    tail = raw[19:]
+    if tail.startswith("."):
+        index = 1
+        while index < len(tail) and tail[index].isdigit():
+            index = index + 1
+        tail = tail[index:]
+    if tail not in ("", "Z", "z", "+00:00"):
+        return None
+    try:
+        return datetime.fromisoformat(raw[:10] + "T" + raw[11:19]).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def eligibility_in_effect(row, now):
+    """False only for an instance shown to have ended (endDateTime at or before now) or not yet begun. An unreadable
+    or missing date keeps the instance in, so data that cannot be read never narrows the admin population."""
+    start = eligibility_time(row.get("startDateTime"))
+    end = eligibility_time(row.get("endDateTime"))
+    if start is not None and start > now:
+        return False
+    if end is not None and end <= now:
+        return False
+    return True
+
+
+def eligibility_page_problem(page):
+    """Why one page of the eligibility read is not evidence, '' when it is."""
+    if not isinstance(page, dict):
+        return "the body is not an object"
+    if "vendorErrorAsResponse" in page:
+        return "Microsoft Graph refused the read (vendor error returned as data)"
+    if page.get("error") or "PSError" in page:
+        return "Microsoft Graph returned an error"
+    for k in ("statusCode", "status_code"):
+        code = page.get(k)
+        if isinstance(code, str) and code.strip().isdigit():
+            code = int(code.strip())
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return "Microsoft Graph answered HTTP " + str(code)
+    if str(page.get("status") or "").strip().lower() in ("error", "failure", "failed", "not available"):
+        return "the read reported an error status"
+    if not isinstance(page.get("value"), list):
+        return "the body carries no value list"
+    if str(page.get("@odata.nextLink") or "").strip() not in ("", "None", "null"):
+        return "only part of it was read (@odata.nextLink remains)"
+    for k in ("paginationTruncated", "truncated"):
+        if str(page.get(k)).strip().lower() in ("true", "1"):
+            return "only part of it was read (" + k + " is set)"
+    for row in page.get("value"):
+        if not isinstance(row, dict) or not str(row.get("principalId") or "").strip():
+            return "an instance is not an object with a principalId"
+    return ""
+
+
+def eligibility_rows(data, now):
+    """(rows, problem, ended) for the PIM eligibility read.
+    Absent: (None, '', 0). Present but not read whole: (None, problem, 0). Read whole: the instances in effect at
+    `now`, and how many were left out because they had ended or not yet begun."""
+    if not isinstance(data, dict) or ELIGIBLE_KEY not in data:
+        return None, "", 0
+    body = data.get(ELIGIBLE_KEY)
+    for attempt in range(4):
+        if not isinstance(body, dict) or "value" in body:
+            break
+        moved = False
+        for k in ELIGIBLE_WRAPPERS:
+            if isinstance(body.get(k), (dict, list)):
+                body = body[k]
+                moved = True
+                break
+        if not moved:
+            break
+    if isinstance(body, list) and len(body) > 0 and all(
+            isinstance(p, dict) and ("value" in p or "error" in p or "vendorErrorAsResponse" in p) for p in body):
+        pages = body
+    elif isinstance(body, list):
+        pages = [{"value": body}]
+    else:
+        pages = [body]
+    rows = []
+    ended = 0
+    for page in pages:
+        problem = eligibility_page_problem(page)
+        if problem:
+            return None, "the PIM role eligibility read (" + ELIGIBLE_ENDPOINT + ") is incomplete: " + problem, 0
+        for row in page.get("value"):
+            if eligibility_in_effect(row, now):
+                rows.append(row)
+            else:
+                ended = ended + 1
+    return rows, "", ended
+
+
+def active_list_read(value):
+    """True for a role-assignment read that is a list body (empty or not) with no error."""
+    if isinstance(value, list):
+        return True
+    return isinstance(value, dict) and isinstance(value.get("value"), list) and not value.get("error")
+
+
+def eligible_admin_principal_ids(rows):
+    """Principal ids of the PIM-eligible instances (in effect now) of privileged roles."""
+    admin_ids = set()
+    for row in rows or []:
+        role_id = role_id_from_entry(row)
+        principal_id = principal_id_from_entry(row)
+        if role_id in PRIVILEGED_ROLE_IDS and principal_id:
+            admin_ids.add(principal_id)
+    return admin_ids
+
+
 def user_has_mail_or_exchange_license(user):
     """True only for a mailbox/productivity SKU or an enabled Exchange plan. `mail` alone is
     not enough (J.J., 3 Oct 2026): see user_has_mail_attribute."""
@@ -403,11 +546,20 @@ def transform(input):
 
         has_license_data = any(isinstance(user, dict) and "assignedLicenses" in user for user in users)
         truncated = truncated_parts(data)
-        admin_principal_ids = collect_admin_principal_ids(data, users)
+        active_principal_ids = collect_admin_principal_ids(data, users)
+        eligible_rows, eligible_problem, eligible_ended = eligibility_rows(data, datetime.now(timezone.utc))
+        eligible_read = eligible_rows is not None
+        eligible_principal_ids = eligible_admin_principal_ids(eligible_rows)
+        admin_principal_ids = set(active_principal_ids)
+        for principal_id in eligible_principal_ids:
+            admin_principal_ids.add(principal_id)
+        # Eligible holders count as role data only beside an active role read (even an empty one): an eligible
+        # list on its own is not the whole admin population.
         has_role_data = (
             bool(as_list(data.get("directoryRoles")))
             or bool(as_list(data.get("roleAssignments")))
-            or len(admin_principal_ids) > 0
+            or len(active_principal_ids) > 0
+            or (len(eligible_principal_ids) > 0 and active_list_read(data.get("roleAssignments")))
         )
 
         admin_count = 0
@@ -461,6 +613,8 @@ def transform(input):
                     "the read is truncated (@odata.nextLink on " + ", ".join(truncated) + "), so later pages "
                     "were not read"
                 )
+            if eligible_problem:
+                unresolved.append(eligible_problem)
 
             is_separate = admin_count > 0 and admins_with_mail_license == 0 and not unresolved
 
@@ -480,7 +634,8 @@ def transform(input):
                     f"All {admin_count} privileged admin account(s) are free of mail/Exchange Online licenses"
                 )
             elif admin_count == 0:
-                no_evidence.append("No privileged directory role members found in user feed")
+                no_evidence.append("No privileged directory role members found in user feed"
+                                   + ("" if eligible_read else " (PIM-eligible assignments were not read)"))
                 no_evidence.extend(unresolved)
                 recommendations.append("Verify directory role membership is included in the integration feed")
             else:
@@ -491,6 +646,8 @@ def transform(input):
                     "Include privileged role members in the getUsers feed with assignedLicenses and assignedPlans "
                     "for license evaluation"
                 )
+            if not eligible_read and not eligible_problem:
+                findings.append(ELIGIBLE_NOT_READ)
             if admins_with_mail_attribute_only:
                 findings.append(
                     f"{len(admins_with_mail_attribute_only)} privileged admin account(s) have a mail address but "
@@ -503,22 +660,32 @@ def transform(input):
             no_evidence.append(feed_update_reason)
             recommendations.append(feed_update_recommendation)
 
+        result = {
+            criteriaKey: is_separate,
+            "userCount": user_count,
+            "adminCount": admin_count,
+            "adminsWithMailLicense": admins_with_mail_license,
+            "adminsWithMailAttributeOnly": len(admins_with_mail_attribute_only),
+        }
+        summary = {"userCount": user_count, "hasLicenseData": has_license_data, "hasRoleData": has_role_data,
+                   "truncated": truncated, "adminsWithoutLicenceList": len(admins_licence_unread)}
+        if has_license_data and has_role_data:
+            # Counted over the same principals as adminCount; a holder of both kinds is in both counts.
+            result["activeAdminCount"] = len(active_principal_ids)
+            result["eligibleAdminCount"] = len(eligible_principal_ids) if eligible_read else None
+            result["eligibleAssignmentsRead"] = eligible_read
+            summary["eligibleOnlyAdminPrincipals"] = len(
+                [p for p in eligible_principal_ids if p not in active_principal_ids])
+            summary["eligibleAssignmentsRead"] = eligible_read
+            summary["eligibleInstancesNotInEffect"] = eligible_ended
+
         return create_response(
-            result={
-                criteriaKey: is_separate,
-                "userCount": user_count,
-                "adminCount": admin_count,
-                "adminsWithMailLicense": admins_with_mail_license,
-                "adminsWithMailAttributeOnly": len(admins_with_mail_attribute_only),
-            },
+            result=result,
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary=with_affected(
-                {"userCount": user_count, "hasLicenseData": has_license_data, "hasRoleData": has_role_data,
-                 "truncated": truncated, "adminsWithoutLicenceList": len(admins_licence_unread)},
-                admins_with_mail_license_names),
+            input_summary=with_affected(summary, admins_with_mail_license_names),
             api_errors=no_evidence,
             additional_findings=findings,
         )

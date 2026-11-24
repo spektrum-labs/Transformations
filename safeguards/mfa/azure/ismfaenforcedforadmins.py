@@ -31,7 +31,7 @@ without a boolean isEnabled, a CA body that is not a policy collection, or a par
 (@odata.nextLink) that does not already cover every role.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 KEY = "isMFAEnforcedForAdmins"
 WRAPPERS = ["api_response", "response", "result", "apiResponse", "Output", "rawResponse", "data"]
@@ -61,6 +61,9 @@ ADMIN_APPS = ["All", "MicrosoftAdminPortals"]
 #                        (RoleManagement.Read.Directory or Directory.Read.All; active assignments only)
 #   registrationDetails  GET /v1.0/reports/authenticationMethods/userRegistrationDetails
 #                        (AuditLog.Read.All; Entra ID P1 or P2; disabled users are not listed; up to 36 h behind)
+# and, optionally, the PIM-eligible holders (roleAssignments is ACTIVE assignments only):
+#   roleEligibilityScheduleInstances  GET /v1.0/roleManagement/directory/roleEligibilityScheduleInstances
+#                        (every page read; instances in effect now join the role holders; see eligibility_rows)
 # Docs: https://learn.microsoft.com/en-us/graph/api/rbacapplication-list-roleassignments
 #       https://learn.microsoft.com/en-us/graph/api/authenticationmethodsroot-list-userregistrationdetails
 # An affected account is an active holder of one of the 14 roles that is either in a role no enforced policy
@@ -101,6 +104,122 @@ def name_list(items):
     return shown
 
 
+# ----------------------------------------------------------------------------- PIM-eligible role holders
+# A tenant that uses Privileged Identity Management (PIM) holds admin roles as ELIGIBLE assignments, which
+# GET /roleManagement/directory/roleAssignments (ACTIVE assignments only) does not return. When the workflow also
+# merges GET /v1.0/roleManagement/directory/roleEligibilityScheduleInstances (every page read) under ELIGIBLE_KEY,
+# its principals join the admin population (RoleEligibilitySchedule.Read.Directory or RoleManagement.Read.Directory;
+# Entra ID P2 for PIM). Key absent (workflow not updated, or no P2): behaviour is unchanged and the output says
+# eligibleAssignmentsRead false. Key present but not read whole (an error or vendor error returned as data, an
+# @odata.nextLink still set, a truncation marker, a body that is not a list): the admin population is incomplete.
+ELIGIBLE_KEY = "roleEligibilityScheduleInstances"
+ELIGIBLE_ENDPOINT = "GET /v1.0/roleManagement/directory/roleEligibilityScheduleInstances"
+ELIGIBLE_WRAPPERS = ["api_response", "apiResponse", "response", "result", "Output", "rawResponse", "data"]
+ELIGIBLE_NOT_READ = ("PIM-eligible role assignments were not read (no " + ELIGIBLE_KEY + " in the input), so "
+                     "administrators who hold a privileged role only through PIM eligibility are not in this result")
+
+
+def eligibility_time(value):
+    """A UTC datetime from Graph's ISO 8601 text ('2026-01-01T00:00:00Z', optional fraction), else None."""
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if len(raw) < 19 or raw[10] not in ("T", "t", " "):
+        return None
+    tail = raw[19:]
+    if tail.startswith("."):
+        index = 1
+        while index < len(tail) and tail[index].isdigit():
+            index = index + 1
+        tail = tail[index:]
+    if tail not in ("", "Z", "z", "+00:00"):
+        return None
+    try:
+        return datetime.fromisoformat(raw[:10] + "T" + raw[11:19]).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def eligibility_in_effect(row, now):
+    """False only for an instance shown to have ended (endDateTime at or before now) or not yet begun. An unreadable
+    or missing date keeps the instance in, so data that cannot be read never narrows the admin population."""
+    start = eligibility_time(row.get("startDateTime"))
+    end = eligibility_time(row.get("endDateTime"))
+    if start is not None and start > now:
+        return False
+    if end is not None and end <= now:
+        return False
+    return True
+
+
+def eligibility_page_problem(page):
+    """Why one page of the eligibility read is not evidence, '' when it is."""
+    if not isinstance(page, dict):
+        return "the body is not an object"
+    if "vendorErrorAsResponse" in page:
+        return "Microsoft Graph refused the read (vendor error returned as data)"
+    if page.get("error") or "PSError" in page:
+        return "Microsoft Graph returned an error"
+    for k in ("statusCode", "status_code"):
+        code = page.get(k)
+        if isinstance(code, str) and code.strip().isdigit():
+            code = int(code.strip())
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return "Microsoft Graph answered HTTP " + str(code)
+    if str(page.get("status") or "").strip().lower() in ("error", "failure", "failed", "not available"):
+        return "the read reported an error status"
+    if not isinstance(page.get("value"), list):
+        return "the body carries no value list"
+    if str(page.get("@odata.nextLink") or "").strip() not in ("", "None", "null"):
+        return "only part of it was read (@odata.nextLink remains)"
+    for k in ("paginationTruncated", "truncated"):
+        if str(page.get(k)).strip().lower() in ("true", "1"):
+            return "only part of it was read (" + k + " is set)"
+    for row in page.get("value"):
+        if not isinstance(row, dict) or not str(row.get("principalId") or "").strip():
+            return "an instance is not an object with a principalId"
+    return ""
+
+
+def eligibility_rows(data, now):
+    """(rows, problem, ended) for the PIM eligibility read.
+    Absent: (None, '', 0). Present but not read whole: (None, problem, 0). Read whole: the instances in effect at
+    `now`, and how many were left out because they had ended or not yet begun."""
+    if not isinstance(data, dict) or ELIGIBLE_KEY not in data:
+        return None, "", 0
+    body = data.get(ELIGIBLE_KEY)
+    for attempt in range(4):
+        if not isinstance(body, dict) or "value" in body:
+            break
+        moved = False
+        for k in ELIGIBLE_WRAPPERS:
+            if isinstance(body.get(k), (dict, list)):
+                body = body[k]
+                moved = True
+                break
+        if not moved:
+            break
+    if isinstance(body, list) and len(body) > 0 and all(
+            isinstance(p, dict) and ("value" in p or "error" in p or "vendorErrorAsResponse" in p) for p in body):
+        pages = body
+    elif isinstance(body, list):
+        pages = [{"value": body}]
+    else:
+        pages = [body]
+    rows = []
+    ended = 0
+    for page in pages:
+        problem = eligibility_page_problem(page)
+        if problem:
+            return None, "the PIM role eligibility read (" + ELIGIBLE_ENDPOINT + ") is incomplete: " + problem, 0
+        for row in page.get("value"):
+            if eligibility_in_effect(row, now):
+                rows.append(row)
+            else:
+                ended = ended + 1
+    return rows, "", ended
+
+
 def admin_accounts(data, role_ids, uncovered):
     """None when the per-account reads are not in the input; otherwise who is affected and why."""
     if not isinstance(data, dict) or "roleAssignments" not in data:
@@ -108,6 +227,9 @@ def admin_accounts(data, role_ids, uncovered):
     rows, rows_partial = collection(data.get("roleAssignments"))
     if rows is None:
         return {"read": False}
+    eligible, eligible_problem, eligible_ended = eligibility_rows(data, datetime.now(timezone.utc))
+    if eligible:
+        rows = list(rows) + eligible
     reg_rows, reg_partial = collection(data.get("registrationDetails"))
     registration = {}
     for reg in reg_rows or []:
@@ -158,13 +280,16 @@ def admin_accounts(data, role_ids, uncovered):
     return {"read": True, "total": len(order), "affected": both + uncovered_only + unregistered_only,
             "uncovered": len(both) + len(uncovered_only), "unregistered": len(both) + len(unregistered_only),
             "registrationRead": reg_rows is not None, "notInReport": not_in_report,
-            "partial": rows_partial, "registrationPartial": reg_partial}
+            "partial": rows_partial, "registrationPartial": reg_partial,
+            "eligibleRead": eligible is not None, "eligibleIncomplete": bool(eligible_problem)}
 
 
 def accounts_line(accounts, scope, what):
     """One line naming the tool and its scope, or None when there is nothing to say."""
     if not accounts["read"]:
         return "Microsoft Entra ID (" + scope + "): accounts not named, the directory role assignments were not read"
+    if accounts.get("eligibleRead"):
+        scope = scope.replace("active holders", "active and PIM-eligible holders")
     line = ("Microsoft Entra ID (" + scope + "): " + str(len(accounts["affected"])) + " of " + str(accounts["total"])
             + " " + what + " (" + str(accounts["uncovered"]) + " in a role no enforced policy covers, "
             + str(accounts["unregistered"]) + " with no MFA method registered)")
@@ -173,6 +298,8 @@ def accounts_line(accounts, scope, what):
     notes = []
     if accounts["partial"]:
         notes.append("the role assignment list is partial (unread pages), so more holders may exist")
+    if accounts.get("eligibleIncomplete"):
+        notes.append("the PIM role eligibility read is incomplete, so PIM-eligible holders may be missing")
     if not accounts["registrationRead"]:
         notes.append("MFA registration not read (the report needs Entra ID P1 or P2), so only role coverage is judged")
     elif accounts["registrationPartial"]:
@@ -189,6 +316,7 @@ def with_affected(summary, accounts):
     if accounts is not None and accounts["read"]:
         summary["affectedAccounts"] = accounts["affected"][:MAX_AFFECTED]
         summary["affectedAccountCount"] = len(accounts["affected"])
+        summary["eligibleAssignmentsRead"] = accounts.get("eligibleRead", False)
     return summary
 
 

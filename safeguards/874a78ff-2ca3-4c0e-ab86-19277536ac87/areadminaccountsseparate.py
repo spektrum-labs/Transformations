@@ -48,6 +48,18 @@ from
 role source. Both need only Directory.Read.All (or RoleManagement.Read.Directory plus
 User.Read.All), which the One-Click app already holds.
 
+PIM-ELIGIBLE ADMINS. roleAssignments returns ACTIVE assignments only; a tenant using
+Privileged Identity Management holds admin roles as ELIGIBLE assignments. When the workflow
+also merges
+    "roleEligibilityScheduleInstances": <Graph list body, every page read>
+from GET /v1.0/roleManagement/directory/roleEligibilityScheduleInstances, the principals of
+the instances in effect now (startDateTime not in the future, endDateTime null or later than
+now) that hold a role in PRIVILEGED_ROLE_IDS join the admin population, and the result
+reports activeAdminCount and eligibleAdminCount (a holder of both is in both; adminCount is
+the distinct total). Eligible group principals stay unresolved like active ones. Without that
+key the verdict is what it was and eligibleAssignmentsRead is false; with the key present but
+not read whole, the read is incomplete (below).
+
 FAIL CLOSED. An empty, null, unrecognised or error body (PSError, Graph {"error": {...}},
 an HTTP 4xx/5xx envelope, an IS error status), a Secure Score body, a read with no
 privileged role holders (every tenant has a Global Administrator), a truncated read
@@ -56,11 +68,12 @@ own user row has no assignedLicenses list (missing or null) returns
 areAdminAccountsSeparate = false together with a dataCollection error, so the check reads
 "not evaluated" rather than pass or fail. A role holder that is shown to have a mailbox or
 a productivity licence (or an enabled Exchange plan) is a measured fail, whatever else is
-missing.
+missing. A PIM eligibility read that is present but not whole (an error or vendor error
+returned as data, @odata.nextLink still set) is incomplete in the same way.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 # ============================================================================
@@ -451,6 +464,135 @@ def privileged_principals(assignments, directory_roles):
     return found
 
 
+# ----------------------------------------------------------------------------- PIM-eligible role holders
+# A tenant that uses Privileged Identity Management (PIM) holds admin roles as ELIGIBLE assignments, which
+# GET /roleManagement/directory/roleAssignments (ACTIVE assignments only) does not return. When the workflow also
+# merges GET /v1.0/roleManagement/directory/roleEligibilityScheduleInstances (every page read) under ELIGIBLE_KEY,
+# its principals join the admin population (RoleEligibilitySchedule.Read.Directory or RoleManagement.Read.Directory;
+# Entra ID P2 for PIM). Key absent (workflow not updated, or no P2): behaviour is unchanged and the output says
+# eligibleAssignmentsRead false. Key present but not read whole (an error or vendor error returned as data, an
+# @odata.nextLink still set, a truncation marker, a body that is not a list): the admin population is incomplete.
+ELIGIBLE_KEY = "roleEligibilityScheduleInstances"
+ELIGIBLE_ENDPOINT = "GET /v1.0/roleManagement/directory/roleEligibilityScheduleInstances"
+ELIGIBLE_WRAPPERS = ["api_response", "apiResponse", "response", "result", "Output", "rawResponse", "data"]
+ELIGIBLE_NOT_READ = ("PIM-eligible role assignments were not read (no " + ELIGIBLE_KEY + " in the input), so "
+                     "administrators who hold a privileged role only through PIM eligibility are not in this result")
+
+
+def eligibility_time(value):
+    """A UTC datetime from Graph's ISO 8601 text ('2026-01-01T00:00:00Z', optional fraction), else None."""
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if len(raw) < 19 or raw[10] not in ("T", "t", " "):
+        return None
+    tail = raw[19:]
+    if tail.startswith("."):
+        index = 1
+        while index < len(tail) and tail[index].isdigit():
+            index = index + 1
+        tail = tail[index:]
+    if tail not in ("", "Z", "z", "+00:00"):
+        return None
+    try:
+        return datetime.fromisoformat(raw[:10] + "T" + raw[11:19]).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def eligibility_in_effect(row, now):
+    """False only for an instance shown to have ended (endDateTime at or before now) or not yet begun. An unreadable
+    or missing date keeps the instance in, so data that cannot be read never narrows the admin population."""
+    start = eligibility_time(row.get("startDateTime"))
+    end = eligibility_time(row.get("endDateTime"))
+    if start is not None and start > now:
+        return False
+    if end is not None and end <= now:
+        return False
+    return True
+
+
+def eligibility_page_problem(page):
+    """Why one page of the eligibility read is not evidence, '' when it is."""
+    if not isinstance(page, dict):
+        return "the body is not an object"
+    if "vendorErrorAsResponse" in page:
+        return "Microsoft Graph refused the read (vendor error returned as data)"
+    if page.get("error") or "PSError" in page:
+        return "Microsoft Graph returned an error"
+    for k in ("statusCode", "status_code"):
+        code = page.get(k)
+        if isinstance(code, str) and code.strip().isdigit():
+            code = int(code.strip())
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return "Microsoft Graph answered HTTP " + str(code)
+    if str(page.get("status") or "").strip().lower() in ("error", "failure", "failed", "not available"):
+        return "the read reported an error status"
+    if not isinstance(page.get("value"), list):
+        return "the body carries no value list"
+    if str(page.get("@odata.nextLink") or "").strip() not in ("", "None", "null"):
+        return "only part of it was read (@odata.nextLink remains)"
+    for k in ("paginationTruncated", "truncated"):
+        if str(page.get(k)).strip().lower() in ("true", "1"):
+            return "only part of it was read (" + k + " is set)"
+    for row in page.get("value"):
+        if not isinstance(row, dict) or not str(row.get("principalId") or "").strip():
+            return "an instance is not an object with a principalId"
+    return ""
+
+
+def eligibility_rows(data, now):
+    """(rows, problem, ended) for the PIM eligibility read.
+    Absent: (None, '', 0). Present but not read whole: (None, problem, 0). Read whole: the instances in effect at
+    `now`, and how many were left out because they had ended or not yet begun."""
+    if not isinstance(data, dict) or ELIGIBLE_KEY not in data:
+        return None, "", 0
+    body = data.get(ELIGIBLE_KEY)
+    for attempt in range(4):
+        if not isinstance(body, dict) or "value" in body:
+            break
+        moved = False
+        for k in ELIGIBLE_WRAPPERS:
+            if isinstance(body.get(k), (dict, list)):
+                body = body[k]
+                moved = True
+                break
+        if not moved:
+            break
+    if isinstance(body, list) and len(body) > 0 and all(
+            isinstance(p, dict) and ("value" in p or "error" in p or "vendorErrorAsResponse" in p) for p in body):
+        pages = body
+    elif isinstance(body, list):
+        pages = [{"value": body}]
+    else:
+        pages = [body]
+    rows = []
+    ended = 0
+    for page in pages:
+        problem = eligibility_page_problem(page)
+        if problem:
+            return None, "the PIM role eligibility read (" + ELIGIBLE_ENDPOINT + ") is incomplete: " + problem, 0
+        for row in page.get("value"):
+            if eligibility_in_effect(row, now):
+                rows.append(row)
+            else:
+                ended = ended + 1
+    return rows, "", ended
+
+
+def eligible_principals(rows):
+    """Map principal id -> kind for the PIM-eligible instances of privileged roles."""
+    found = {}
+    for row in rows or []:
+        if lower_id(row.get("roleDefinitionId") or row.get("roleTemplateId")) not in PRIVILEGED_ROLE_IDS:
+            continue
+        principal = row.get("principal") if isinstance(row.get("principal"), dict) else {}
+        pid = lower_id(row.get("principalId") or principal.get("id"))
+        if pid:
+            found[pid] = odata_kind(principal) or found.get(pid, "")
+    return found
+
+
 def transform(input):
     """Evaluate whether privileged Entra roles are held by dedicated admin accounts."""
     default_result = {
@@ -523,8 +665,19 @@ def transform(input):
                     has_licence_field = True
 
         principals = privileged_principals(assignments, directory_roles)
+        active_ids = set(principals)
+        eligible_rows, eligible_problem, eligible_ended = eligibility_rows(data, datetime.now(timezone.utc))
+        eligible_read = eligible_rows is not None
+        eligible = eligible_principals(eligible_rows)
+        for pid in eligible:
+            if pid not in principals or not principals[pid]:
+                principals[pid] = eligible[pid]
+        if eligible_problem:
+            api_errors.append(eligible_problem)
 
         admin_count = 0
+        active_admins = 0
+        eligible_admins = 0
         disabled_admins = 0
         service_principals = 0
         unresolved = []
@@ -545,6 +698,10 @@ def transform(input):
                 unresolved.append(short(pid, 60) + " (not in the user read)")
                 continue
             admin_count = admin_count + 1
+            if pid in active_ids:
+                active_admins = active_admins + 1
+            if pid in eligible:
+                eligible_admins = eligible_admins + 1
             if not is_enabled(user):
                 disabled_admins = disabled_admins + 1
                 continue
@@ -571,6 +728,9 @@ def transform(input):
             "unresolvedAdminPrincipals": len(unresolved),
             "adminsWithMailAttributeOnly": len(mail_only),
             "adminsWithUnclassifiedMailboxLicence": len(unclassified),
+            "activeAdminCount": active_admins,
+            "eligibleAdminCount": eligible_admins if eligible_read else None,
+            "eligibleAssignmentsRead": eligible_read,
         }
         summary = {
             "privilegedPrincipals": len(principals),
@@ -581,8 +741,15 @@ def transform(input):
             "hasLicenceData": has_licence_field,
             "adminsWithoutLicenceList": len(licence_unread),
             "truncated": truncated,
+            "activeAdminUsers": active_admins,
+            "eligibleAdminUsers": eligible_admins if eligible_read else None,
+            "eligibleOnlyAdminUsers": len([p for p in eligible if p not in active_ids and p in users_by_id]),
+            "eligibleAssignmentsRead": eligible_read,
+            "eligibleInstancesNotInEffect": eligible_ended,
         }
         findings = []
+        if not eligible_read and not eligible_problem:
+            findings.append(ELIGIBLE_NOT_READ)
         if service_principals > 0:
             findings.append(f"{service_principals} privileged role holder(s) are service principals (not judged)")
         if disabled_admins > 0:
@@ -629,8 +796,13 @@ def transform(input):
                               f"account(s) with a mail address and no assignedPlans in the read: "
                               + "; ".join(unclassified[:5]))
         if admin_count == 0 and not unresolved:
-            incomplete.append("no enabled user holds a privileged directory role; every tenant has a "
-                              "Global Administrator, so the read is incomplete")
+            if eligible_read:
+                incomplete.append("no user holds a privileged directory role, active or PIM-eligible; every tenant "
+                                  "has a Global Administrator, so the read is incomplete")
+            else:
+                incomplete.append("no enabled user holds a privileged directory role; every tenant has a "
+                                  "Global Administrator, so the read is incomplete (PIM-eligible assignments "
+                                  "were not read)")
         if api_errors:
             incomplete = api_errors + incomplete
 

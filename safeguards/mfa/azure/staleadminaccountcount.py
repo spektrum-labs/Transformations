@@ -11,11 +11,21 @@ so this transform receives {"roleAssignments": <body>, "users": <body>}:
                      userType,createdDateTime,signInActivity&$top=120, @odata.nextLink paging. signInActivity
                      needs an Entra ID P1 or P2 licence; without one Graph answers HTTP 403, which the method hands
                      over as a vendorErrorAsResponse marker.
+Optional third key, PIM-ELIGIBLE role holders:
+  roleEligibilityScheduleInstances <- GET /v1.0/roleManagement/directory/roleEligibilityScheduleInstances, every page
+                     read (a Graph body, a bare list or a list of pages). The instances in effect now (startDateTime
+                     not in the future, endDateTime null or later) are judged exactly like active assignments, so a
+                     tenant that holds its admin roles through PIM eligibility has those admins counted.
+                     Absent: the result is what it was, with eligibleAssignmentsRead false. Present but not read whole
+                     (an error or vendorErrorAsResponse marker, @odata.nextLink or a truncation marker): Unevaluated,
+                     like an unfinished role-assignment read.
 
-staleAdminAccountCount = the number of ENABLED active role holders with no successful sign-in in the last
-STALE_DAYS (90) days:
-  * an admin is a USER that is the principal of an active directory role assignment (any directory role, any
-    scope). Service principals holding a role are not users and are not counted (their number is in inputSummary);
+staleAdminAccountCount = the number of ENABLED role holders with no successful sign-in in the last STALE_DAYS (90)
+days:
+  * an admin is a USER that is the principal of an active directory role assignment, or (when read) of a PIM-eligible
+    one in effect now (any directory role, any scope). activeAdminCount and eligibleAdminCount count the enabled
+    admins by kind (a holder of both is in both; adminCount is the distinct total). Service principals holding a
+    role are not users and are not counted (their number is in inputSummary);
   * GROUP-HELD assignments (principal @odata.type #microsoft.graph.group): role-assignable group members are not
     expanded, so they could hide a stale admin. With any group-held assignment, a user-level count of 0 is
     Unevaluated ("N role assignments are through groups; members not checked"), never a pass; a count above 0 is
@@ -30,8 +40,9 @@ STALE_DAYS (90) days:
 The requirement reads lessThan "0" (Token-Service: <= 0), so the check passes only at 0.
 "Now" is one datetime.now(timezone.utc) read per evaluation (utc_now), reported as inputSummary.evaluatedAt.
 
-Not covered: PIM-ELIGIBLE role holders (roleEligibilityScheduleInstances) are not read, so the scope is "active
-role holders". Entra speaks only for Entra role holders; the first reason names the tool and that scope and at
+Not covered: without roleEligibilityScheduleInstances in the input, PIM-ELIGIBLE role holders are not read, so the
+scope is "active role holders" (inputSummary.pimEligibleCovered false). Members of role-assignable groups are never
+expanded. Entra speaks only for Entra role holders; the first reason names the tool and that scope and at
 most 20 accounts, then "and N more"; inputSummary.affectedAccounts carries at most 50, with the full count in
 affectedAccountCount (same shape as legacyauthblocked.py, #891).
 
@@ -65,6 +76,8 @@ USER_TYPE = "#microsoft.graph.user"
 NON_USER_TYPES = ["#microsoft.graph.serviceprincipal", "#microsoft.graph.group", "#microsoft.graph.device"]
 NOT_COVERED = ("Not covered: PIM-eligible role holders (not active) and members of role-assignable groups are "
                "not read; only users with an active directory role assignment are judged.")
+NOT_COVERED_WITH_PIM = ("Not covered: members of role-assignable groups are not read; users with an active or a "
+                        "PIM-eligible directory role assignment are judged.")
 
 
 # ---------------------------------------------------------------- shared helpers (same in the Duo and Entra files)
@@ -288,6 +301,122 @@ def finish(stale, enabled_count, never_count, disabled, extra_summary, now, scop
 
 # ---------------------------------------------------------------- Microsoft Entra ID
 
+# ----------------------------------------------------------------------------- PIM-eligible role holders
+# A tenant that uses Privileged Identity Management (PIM) holds admin roles as ELIGIBLE assignments, which
+# GET /roleManagement/directory/roleAssignments (ACTIVE assignments only) does not return. When the workflow also
+# merges GET /v1.0/roleManagement/directory/roleEligibilityScheduleInstances (every page read) under ELIGIBLE_KEY,
+# its principals join the admin population (RoleEligibilitySchedule.Read.Directory or RoleManagement.Read.Directory;
+# Entra ID P2 for PIM). Key absent (workflow not updated, or no P2): behaviour is unchanged and the output says
+# eligibleAssignmentsRead false. Key present but not read whole (an error or vendor error returned as data, an
+# @odata.nextLink still set, a truncation marker, a body that is not a list): the admin population is incomplete.
+ELIGIBLE_KEY = "roleEligibilityScheduleInstances"
+ELIGIBLE_ENDPOINT = "GET /v1.0/roleManagement/directory/roleEligibilityScheduleInstances"
+ELIGIBLE_WRAPPERS = ["api_response", "apiResponse", "response", "result", "Output", "rawResponse", "data"]
+ELIGIBLE_NOT_READ = ("PIM-eligible role assignments were not read (no " + ELIGIBLE_KEY + " in the input), so "
+                     "administrators who hold a privileged role only through PIM eligibility are not in this result")
+
+
+def eligibility_time(value):
+    """A UTC datetime from Graph's ISO 8601 text ('2026-01-01T00:00:00Z', optional fraction), else None."""
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if len(raw) < 19 or raw[10] not in ("T", "t", " "):
+        return None
+    tail = raw[19:]
+    if tail.startswith("."):
+        index = 1
+        while index < len(tail) and tail[index].isdigit():
+            index = index + 1
+        tail = tail[index:]
+    if tail not in ("", "Z", "z", "+00:00"):
+        return None
+    try:
+        return datetime.fromisoformat(raw[:10] + "T" + raw[11:19]).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def eligibility_in_effect(row, now):
+    """False only for an instance shown to have ended (endDateTime at or before now) or not yet begun. An unreadable
+    or missing date keeps the instance in, so data that cannot be read never narrows the admin population."""
+    start = eligibility_time(row.get("startDateTime"))
+    end = eligibility_time(row.get("endDateTime"))
+    if start is not None and start > now:
+        return False
+    if end is not None and end <= now:
+        return False
+    return True
+
+
+def eligibility_page_problem(page):
+    """Why one page of the eligibility read is not evidence, '' when it is."""
+    if not isinstance(page, dict):
+        return "the body is not an object"
+    if "vendorErrorAsResponse" in page:
+        return "Microsoft Graph refused the read (vendor error returned as data)"
+    if page.get("error") or "PSError" in page:
+        return "Microsoft Graph returned an error"
+    for k in ("statusCode", "status_code"):
+        code = page.get(k)
+        if isinstance(code, str) and code.strip().isdigit():
+            code = int(code.strip())
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return "Microsoft Graph answered HTTP " + str(code)
+    if str(page.get("status") or "").strip().lower() in ("error", "failure", "failed", "not available"):
+        return "the read reported an error status"
+    if not isinstance(page.get("value"), list):
+        return "the body carries no value list"
+    if str(page.get("@odata.nextLink") or "").strip() not in ("", "None", "null"):
+        return "only part of it was read (@odata.nextLink remains)"
+    for k in ("paginationTruncated", "truncated"):
+        if str(page.get(k)).strip().lower() in ("true", "1"):
+            return "only part of it was read (" + k + " is set)"
+    for row in page.get("value"):
+        if not isinstance(row, dict) or not str(row.get("principalId") or "").strip():
+            return "an instance is not an object with a principalId"
+    return ""
+
+
+def eligibility_rows(data, now):
+    """(rows, problem, ended) for the PIM eligibility read.
+    Absent: (None, '', 0). Present but not read whole: (None, problem, 0). Read whole: the instances in effect at
+    `now`, and how many were left out because they had ended or not yet begun."""
+    if not isinstance(data, dict) or ELIGIBLE_KEY not in data:
+        return None, "", 0
+    body = data.get(ELIGIBLE_KEY)
+    for attempt in range(4):
+        if not isinstance(body, dict) or "value" in body:
+            break
+        moved = False
+        for k in ELIGIBLE_WRAPPERS:
+            if isinstance(body.get(k), (dict, list)):
+                body = body[k]
+                moved = True
+                break
+        if not moved:
+            break
+    if isinstance(body, list) and len(body) > 0 and all(
+            isinstance(p, dict) and ("value" in p or "error" in p or "vendorErrorAsResponse" in p) for p in body):
+        pages = body
+    elif isinstance(body, list):
+        pages = [{"value": body}]
+    else:
+        pages = [body]
+    rows = []
+    ended = 0
+    for page in pages:
+        problem = eligibility_page_problem(page)
+        if problem:
+            return None, "the PIM role eligibility read (" + ELIGIBLE_ENDPOINT + ") is incomplete: " + problem, 0
+        for row in page.get("value"):
+            if eligibility_in_effect(row, now):
+                rows.append(row)
+            else:
+                ended = ended + 1
+    return rows, "", ended
+
+
 def unwrap(value):
     for _ in range(4):
         if not isinstance(value, dict) or "roleAssignments" in value or "users" in value:
@@ -430,6 +559,10 @@ def evaluate(data, now):
     users = items_of(bodies["users"])
     if assignments is None:
         return unevaluated("the role assignment list from " + ENDPOINTS["roleAssignments"] + " is not a list")
+    eligible, problem, eligible_ended = eligibility_rows(data, now)
+    if problem:
+        return unevaluated(problem)
+    eligible_read = eligible is not None
     if not users:
         return unevaluated("no users were read from " + ENDPOINTS["users"])
     if not any(isinstance(u, dict) and "signInActivity" in u for u in users):
@@ -442,11 +575,14 @@ def evaluate(data, now):
 
     admin_ids = []
     admin_seen = set()
+    active_seen = set()
+    eligible_seen = set()
     missing = []
     missing_seen = set()
     non_user = 0
     groups = 0
-    for entry in assignments:
+    tagged = [(entry, active_seen) for entry in assignments] + [(entry, eligible_seen) for entry in (eligible or [])]
+    for entry, seen_by_kind in tagged:
         if not isinstance(entry, dict):
             return unevaluated("a role assignment is not an object")
         principal = entry.get("principal") if isinstance(entry.get("principal"), dict) else {}
@@ -467,6 +603,7 @@ def evaluate(data, now):
                     missing_seen.add(pid)
                     missing.append(pid)
                 continue
+            seen_by_kind.add(pid)
             if pid not in admin_seen:
                 admin_seen.add(pid)
                 admin_ids.append(pid)
@@ -479,18 +616,22 @@ def evaluate(data, now):
     if missing:
         return unevaluated(str(len(missing)) + " user role holder(s) are not in the user list (a partial read), so "
                            "their sign-in cannot be read: " + name_list([clip(m) for m in missing]))
+    held = "an active or PIM-eligible directory role" if eligible_read else "an active directory role"
     if not admin_ids and groups:
-        return unevaluated(group_text(groups) + "; no user holds an active directory role directly",
+        return unevaluated(group_text(groups) + "; no user holds " + held + " directly",
                            {"groupRoleAssignmentCount": groups})
     if not admin_ids:
-        return unevaluated("no user holds an active directory role in the read (" + str(len(assignments))
-                           + " assignment(s)); a tenant always has a Global Administrator, so this is a failed or "
-                           "empty read")
+        return unevaluated("no user holds " + held + " in the read (" + str(len(assignments))
+                           + " assignment(s)" + ("" if not eligible_read else ", " + str(len(eligible))
+                                                 + " eligibility instance(s) in effect")
+                           + "); a tenant always has a Global Administrator, so this is a failed or empty read")
 
     stale = []
     disabled = []
     never = 0
     enabled = 0
+    enabled_active = 0
+    enabled_eligible = 0
     for pid in admin_ids:
         user = users_by_id[pid]
         name = user_name(user, pid)
@@ -503,6 +644,10 @@ def evaluate(data, now):
         if account_enabled is not True:
             return unevaluated("role holder " + name + " has no readable accountEnabled")
         enabled += 1
+        if pid in active_seen:
+            enabled_active += 1
+        if pid in eligible_seen:
+            enabled_eligible += 1
         last, problem = last_sign_in(user.get("signInActivity"))
         if problem:
             return unevaluated("role holder " + name + ": " + problem)
@@ -519,7 +664,7 @@ def evaluate(data, now):
             stale.append(name)
 
     if enabled == 0:
-        return unevaluated("no enabled user holds an active directory role (" + str(len(admin_ids))
+        return unevaluated("no enabled user holds " + held + " (" + str(len(admin_ids))
                            + " role holder(s), all disabled)", {"groupRoleAssignmentCount": groups})
 
     if groups and not stale:
@@ -527,18 +672,31 @@ def evaluate(data, now):
                            "in within " + str(STALE_DAYS) + " days, but that is not the whole admin population",
                            {"groupRoleAssignmentCount": groups, "adminCount": enabled})
 
+    if eligible_read:
+        scope = "enabled active or PIM-eligible role holders (users with an active or eligible directory role " \
+            "assignment)"
+    else:
+        scope = "enabled active role holders (users with an active directory role assignment)"
     out = finish(
         stale, enabled, never, disabled,
         {"roleAssignmentCount": len(assignments), "nonUserRoleHolderCount": non_user,
-         "groupRoleAssignmentCount": groups, "userCount": len(users), "pimEligibleCovered": False},
+         "groupRoleAssignmentCount": groups, "userCount": len(users), "pimEligibleCovered": eligible_read,
+         "eligibleAssignmentsRead": eligible_read,
+         "eligibilityInstanceCount": len(eligible) if eligible_read else None,
+         "eligibleInstancesNotInEffect": eligible_ended,
+         "activeAdminCount": enabled_active,
+         "eligibleAdminCount": enabled_eligible if eligible_read else None},
         now,
-        TOOL + ": %d of %d enabled active role holders (users with an active directory role assignment) have "
-        "no successful sign-in in " + str(STALE_DAYS) + "+ days",
+        TOOL + ": %d of %d " + scope + " have no successful sign-in in " + str(STALE_DAYS) + "+ days",
         ["Review each role holder with no successful sign-in in " + str(STALE_DAYS) + " days: remove the role "
          "assignment or disable the account if it is no longer needed. Emergency-access (break-glass) accounts "
          "are counted too; keep them only with documented sign-in monitoring."],
-        NOT_COVERED,
+        NOT_COVERED_WITH_PIM if eligible_read else NOT_COVERED,
     )
+    # Counts by kind beside the verdict (a holder of both is in both; adminCount is the distinct total).
+    out["transformedResponse"]["activeAdminCount"] = enabled_active
+    out["transformedResponse"]["eligibleAdminCount"] = enabled_eligible if eligible_read else None
+    out["transformedResponse"]["eligibleAssignmentsRead"] = eligible_read
     if groups:
         fails = out["additionalInfo"]["evaluation"]["failReasons"]
         fails[0] = fails[0] + " (" + str(groups) + " group-held role assignment(s) were not expanded; their members " \
