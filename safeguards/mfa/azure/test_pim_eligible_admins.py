@@ -503,3 +503,249 @@ def test_pim_rows_that_are_not_schedules_do_not_count(path, mode):
     for body in ({"value": [{}]}, [{"vendorErrorAsResponse": {"status": 403}}], {}):
         out = load(path, mode)(body)
         assert out["transformedResponse"][PIM_KEY] is False, body
+
+
+# ============================================================================ follow-up review of #1442
+# 1. PIM-eligible holders only ADD to an ACTIVE read that succeeded. When roleAssignments is an error, a refusal,
+#    {}, an unreadable page list or missing, one clean eligible admin used to pass areAdminAccountsSeparate and
+#    arePrivilegedAccountsCloudOnly (before #1442: not evaluated). Every admin check now stays not evaluated.
+# 2. A truncation marker on the eligibility read (response_metadata.paginationTruncated, pagination.truncated, a
+#    flag on a wrapper object, paginationStats) is an incomplete read, never a complete one.
+
+GRAPH_ERROR = {"error": {"code": "Authorization_RequestDenied", "message": "placeholder"}}
+BROKEN_ACTIVE = {
+    "error_body": GRAPH_ERROR,
+    "vendor_403": {"vendorErrorAsResponse": {"status": 403, "body": GRAPH_ERROR}},
+    "status_403": {"statusCode": 403, "message": "placeholder"},
+    "empty_object": {},
+    "wrapped_error": {"apiResponse": GRAPH_ERROR},
+    "page_list_with_error": [graph([]), GRAPH_ERROR],
+    "page_list_unparseable": [{"value": "x"}, {"value": "y"}],
+    "page_list_mixed": [graph([]), {"placeholder": 1}],
+    "row_without_principal": graph([{}]),
+    "absent": None,
+    # Second review of the follow-up: an empty value list beside an error marker, or inside an error wrapper.
+    "status_error": graph([], status="error"),
+    "http_status_403": graph([], httpStatus=403),
+    "success_false": graph([], success=False),
+    "errors_list": graph([], errors=["placeholder"]),
+    "error_wrapper": {"error": {"code": "Forbidden", "message": "placeholder"}, "apiResponse": graph([])},
+    "status_wrapper": {"status": "error", "response": graph([])},
+}
+
+
+def broken_active_body(path, case):
+    """A tenant whose only privileged holder is a clean PIM-eligible admin, beside a broken active read."""
+    if path in STALE:
+        users = [stale_user(ELIGIBLE, 3)]
+    elif path in CLOUD:
+        users = [cloud_user(ELIGIBLE)]
+    else:
+        users = [sep_user(ELIGIBLE, [P2])]
+    body = {"users": graph(users), "roleEligibilityScheduleInstances": graph([ei(ELIGIBLE)])}
+    if BROKEN_ACTIVE[case] is not None:
+        body["roleAssignments"] = copy.deepcopy(BROKEN_ACTIVE[case])
+    return body
+
+
+ADMIN_CHECKS = [(SEP_AZURE, SEP_KEY), (SEP_M365, SEP_KEY), (SEP_RA, SEP_KEY), (CLOUD[0], CLOUD_KEY),
+                (CLOUD[1], CLOUD_KEY), (STALE[0], STALE_KEY), (STALE[1], STALE_KEY)]
+
+
+def admin_params():
+    out = []
+    for path, key in ADMIN_CHECKS:
+        for mode in ("native", "sandbox"):
+            out.append(pytest.param(path, key, mode, id=path.parent.name[:8] + "-" + path.stem[:12] + "-" + mode))
+    return out
+
+
+@pytest.mark.parametrize("path,key,mode", admin_params())
+@pytest.mark.parametrize("case", sorted(BROKEN_ACTIVE))
+def test_broken_active_read_is_never_replaced_by_eligibility(path, key, mode, case):
+    out = load(path, mode)(broken_active_body(path, case))
+    value = out["transformedResponse"][key]
+    assert value is not True, (case, value)
+    if path in STALE or path in CLOUD or path == SEP_RA:
+        assert value is None, (case, value)
+    assert status(out) == "error", case
+
+
+@pytest.mark.parametrize("path,mode", params([SEP_AZURE, SEP_M365]))
+def test_separate_clean_page_list_active_read_still_adds_eligible_admins(path, mode):
+    users = [sep_user(ACTIVE, [P2]), sep_user(ELIGIBLE, [P2])]
+    body = sep_body([], graph([ei(ELIGIBLE)]), users)
+    body["roleAssignments"] = [graph([ra(ACTIVE)]), graph([])]
+    out = load(path, mode)(body)
+    result = out["transformedResponse"]
+    assert result[SEP_KEY] is True and status(out) == "success"
+    assert result["activeAdminCount"] == 1 and result["eligibleAdminCount"] == 1
+
+
+@pytest.mark.parametrize("path,mode", params([SEP_AZURE, SEP_M365]))
+def test_separate_page_list_with_next_link_is_truncated(path, mode):
+    body = sep_body([], graph([ei(ELIGIBLE)]), [sep_user(ACTIVE, [P2]), sep_user(ELIGIBLE, [P2])])
+    body["roleAssignments"] = [graph([ra(ACTIVE)], **{"@odata.nextLink": NEXT})]
+    out = load(path, mode)(body)
+    assert out["transformedResponse"][SEP_KEY] is not True and status(out) == "error"
+
+
+@pytest.mark.parametrize("path,mode", params(CLOUD))
+def test_cloudonly_clean_page_list_active_read_still_adds_eligible_admins(path, mode):
+    body = cloud_body([], graph([ei(ELIGIBLE)]), [cloud_user(ACTIVE), cloud_user(ELIGIBLE)])
+    body["roleAssignments"] = [graph([ra(ACTIVE)]), graph([])]
+    out = load(path, mode)(body)
+    result = out["transformedResponse"]
+    assert result[CLOUD_KEY] is True and status(out) == "success"
+    assert result["activeAdminCount"] == 1 and result["eligibleAdminCount"] == 1
+
+
+@pytest.mark.parametrize("module_path", [MFA_ADMINS, MFA_SEC])
+@pytest.mark.parametrize("case", sorted(BROKEN_ACTIVE))
+def test_mfa_helpers_name_no_eligible_holder_beside_a_broken_active_read(module_path, case):
+    spec = importlib.util.spec_from_file_location("pim_helper_" + module_path.stem, module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    roles = module.SECURITY_ADMIN_ROLES if module_path == MFA_SEC else module.ADMIN_ROLES
+    data = mfa_body(graph([ei(ELIGIBLE, role=SEC)]))
+    if BROKEN_ACTIVE[case] is None:
+        del data["roleAssignments"]
+    else:
+        data["roleAssignments"] = copy.deepcopy(BROKEN_ACTIVE[case])
+    accounts = module.admin_accounts(data, roles, [])
+    assert accounts is None or accounts == {"read": False}, (case, accounts)
+
+
+TRUNCATED_ELIGIBILITY = {
+    "response_metadata": lambda rows: graph(rows, response_metadata={"paginationTruncated": True}),
+    "pagination_block": lambda rows: graph(rows, pagination={"truncated": True}),
+    "wrapper_flag": lambda rows: {"apiResponse": graph(rows), "paginationTruncated": True},
+    "wrapper_metadata": lambda rows: {"response": graph(rows), "response_metadata": {"paginationTruncated": "true"}},
+    "iterate_truncated": lambda rows: graph(rows, iterateTruncated=True),
+    "page_list_flag": lambda rows: [graph(rows), graph([], response_metadata={"paginationTruncated": True})],
+}
+
+
+def truncated_body(path, case, stats=False):
+    """A PIM-only tenant with a clean eligible admin: a missed truncation marker would read as a pass."""
+    rows = [ei(ELIGIBLE)]
+    eligible = graph(rows) if stats else TRUNCATED_ELIGIBILITY[case](rows)
+    if path in STALE:
+        body = stale_body([], eligible)
+        body["users"] = graph([stale_user(ELIGIBLE, 3)])
+    elif path in CLOUD:
+        body = cloud_body([], eligible, [cloud_user(ELIGIBLE)])
+    else:
+        body = sep_body([], eligible, [sep_user(ELIGIBLE, [P2])])
+    if stats:
+        body["paginationStats"] = {"roleEligibilityScheduleInstances": {"paginationTruncated": True}}
+    return body
+
+
+@pytest.mark.parametrize("path,key,mode", admin_params())
+@pytest.mark.parametrize("case", sorted(TRUNCATED_ELIGIBILITY) + ["pagination_stats"])
+def test_truncated_eligibility_read_is_incomplete(path, key, mode, case):
+    body = truncated_body(path, case, stats=True) if case == "pagination_stats" else truncated_body(path, case)
+    out = load(path, mode)(body)
+    value = out["transformedResponse"][key]
+    assert value is not True, (case, value)
+    assert status(out) == "error", case
+    assert any("eligible admins were not fully read" in e for e in info(out)["dataCollection"]["errors"]), case
+
+
+@pytest.mark.parametrize("case", sorted(TRUNCATED_ELIGIBILITY))
+def test_mfa_helper_treats_truncated_eligibility_as_not_read(case):
+    spec = importlib.util.spec_from_file_location("pim_secadmins_trunc", MFA_SEC)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    accounts = module.admin_accounts(mfa_body(TRUNCATED_ELIGIBILITY[case]([ei(ELIGIBLE, role=SEC)])),
+                                     module.SECURITY_ADMIN_ROLES, [])
+    assert accounts["eligibleRead"] is False and accounts["eligibleIncomplete"] is True
+    assert accounts["total"] == 1
+
+
+
+# ============================================================================ second review of the follow-up
+# The active read is judged by what it says, not by its shape: an absent or null roleAssignments beside an
+# eligibility read is not evaluated whatever directoryRoles holds; a row with no roleDefinitionId cannot show
+# which role it grants (it could hide a mailbox-licensed Global Administrator); a truncation marker the workflow
+# set for the whole read (paginationTruncated, paginationStats.<read>) is honoured by every admin check; and a
+# page list whose LAST page has no next link is a whole read, even though its earlier pages keep theirs.
+
+@pytest.mark.parametrize("path,key,mode", admin_params())
+@pytest.mark.parametrize("active", ["absent", "null"])
+def test_missing_active_read_beside_a_broken_directory_role_read(path, key, mode, active):
+    body = broken_active_body(path, "absent")
+    if active == "null":
+        body["roleAssignments"] = None
+    body["directoryRoles"] = {"error": {"code": "Forbidden", "message": "placeholder"}}
+    out = load(path, mode)(body)
+    assert out["transformedResponse"][key] is not True and status(out) == "error"
+    if path in STALE or path in CLOUD or path == SEP_RA:
+        assert out["transformedResponse"][key] is None
+
+
+NO_ROLE_CHECKS = [(SEP_AZURE, SEP_KEY), (SEP_M365, SEP_KEY), (SEP_RA, SEP_KEY), (CLOUD[0], CLOUD_KEY),
+                  (CLOUD[1], CLOUD_KEY)]
+
+
+@pytest.mark.parametrize("path,key", NO_ROLE_CHECKS)
+@pytest.mark.parametrize("mode", ["native", "sandbox"])
+def test_active_row_without_role_id_is_not_evaluated(path, key, mode):
+    # The row hides a Global Administrator who holds a mailbox licence (or is synced from on-premises).
+    hidden = {"id": "ra-hidden", "principalId": OTHER, "directoryScopeId": "/",
+              "principal": {"@odata.type": USER_T, "id": OTHER}}
+    if path in CLOUD:
+        body = cloud_body([], graph([ei(ELIGIBLE)]), [cloud_user(ELIGIBLE), cloud_user(OTHER, True)])
+    else:
+        body = sep_body([], graph([ei(ELIGIBLE)]), [sep_user(ELIGIBLE, [P2]), sep_user(OTHER, [E3])])
+    body["roleAssignments"] = graph([hidden])
+    out = load(path, mode)(body)
+    assert out["transformedResponse"][key] is not True and status(out) == "error"
+
+
+WORKFLOW_MARKERS = {
+    "workflow_flag": {"paginationTruncated": True},
+    "workflow_metadata": {"response_metadata": {"paginationTruncated": "true"}},
+    "stats_roleAssignments": {"paginationStats": {"roleAssignments": {"paginationTruncated": True}}},
+    "stats_users": {"paginationStats": {"users": {"paginationTruncated": True}}},
+}
+
+
+@pytest.mark.parametrize("path,key,mode", admin_params())
+@pytest.mark.parametrize("case", sorted(WORKFLOW_MARKERS))
+def test_workflow_truncation_marker_is_honoured(path, key, mode, case):
+    body = broken_active_body(path, "absent")
+    body["roleAssignments"] = graph([])
+    body.update(copy.deepcopy(WORKFLOW_MARKERS[case]))
+    out = load(path, mode)(body)
+    assert out["transformedResponse"][key] is not True and status(out) == "error", case
+
+
+def full_page_list_body(path, last_link):
+    """Active and eligibility reads as page lists whose earlier pages keep @odata.nextLink."""
+    active = [graph([ra(ACTIVE)], **{"@odata.nextLink": NEXT}), graph([], **({"@odata.nextLink": NEXT} if last_link else {}))]
+    eligible = [graph([ei(ELIGIBLE)], **{"@odata.nextLink": NEXT}), graph([])]
+    if path in STALE:
+        body = stale_body([], eligible)
+        body["users"] = graph([stale_user(ACTIVE, 3), stale_user(ELIGIBLE, 3)])
+    elif path in CLOUD:
+        body = cloud_body([], eligible, [cloud_user(ACTIVE), cloud_user(ELIGIBLE)])
+    else:
+        body = sep_body([], eligible, [sep_user(ACTIVE, [P2]), sep_user(ELIGIBLE, [P2])])
+    body["roleAssignments"] = active
+    return body
+
+
+@pytest.mark.parametrize("path,key,mode", admin_params())
+def test_fully_read_page_list_is_whole(path, key, mode):
+    out = load(path, mode)(full_page_list_body(path, last_link=False))
+    expected = 0 if path in STALE else True
+    assert out["transformedResponse"][key] == expected and status(out) == "success"
+    assert out["transformedResponse"]["activeAdminCount"] == 1 and out["transformedResponse"]["eligibleAdminCount"] == 1
+
+
+@pytest.mark.parametrize("path,key,mode", admin_params())
+def test_page_list_whose_last_page_links_on_is_truncated(path, key, mode):
+    out = load(path, mode)(full_page_list_body(path, last_link=True))
+    assert out["transformedResponse"][key] is not True and status(out) == "error"

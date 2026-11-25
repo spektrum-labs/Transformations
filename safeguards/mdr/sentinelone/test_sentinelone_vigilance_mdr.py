@@ -1,6 +1,7 @@
 """SentinelOne Vigilance MDR transforms: real verdicts on complete reads, None on anything else."""
 import importlib.util
 import os
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -119,9 +120,10 @@ def test_inventory_coverage_counts_installed_agents_that_are_offline():
 
 def test_inventory_coverage_falls_for_uninstalled_and_skips_stale():
     key = "assetInventoryCoveragePercentage"
-    recent = "2999-01-01T00:00:00Z"
+    # Real dates: a check-in after the time of the read is not evidence (see the #1442 follow-up below).
+    recent = days_ago(1)
     agents = [agent(1, active=False, last=recent), agent(2, uninstalled=True, last=recent),
-              agent(3, uninstalled=True, last=recent), agent(4, last="2998-01-01T00:00:00Z")]
+              agent(3, uninstalled=True, last=recent), agent(4, last=days_ago(40))]
     out = load(key)(body(agents))["transformedResponse"]
     assert out[key] == 33.33
     assert out["staleAgentCount"] == 1
@@ -132,3 +134,64 @@ def test_inventory_coverage_all_stale_is_not_measured():
     out = load(key)(body([agent(1, last="2000-01-01T00:00:00Z"), agent(2, last="2000-01-02T00:00:00Z")]))
     assert out["transformedResponse"][key] is None
     assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+
+
+# ---- follow-up review of #1442: a missing or null isUninstalled is not evidence of an installed agent
+
+def days_ago(n):
+    return (datetime.utcnow() - timedelta(days=n)).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+
+
+def unflagged(i, flag="missing", active=None):
+    a = agent(i, active=active)
+    if flag == "missing":
+        del a["isUninstalled"]
+    else:
+        a["isUninstalled"] = flag
+    if active is None:
+        del a["isActive"]
+    return a
+
+
+@pytest.mark.parametrize("flag", ["missing", None, "", "unknown"])
+def test_inventory_coverage_one_unflagged_agent_is_not_measured(flag):
+    # Reviewer's case: one agent with no isUninstalled read 100.0 (it read 0.0 before #1442).
+    out = load("assetInventoryCoveragePercentage")(body([unflagged(1, flag)]))
+    assert out["transformedResponse"]["assetInventoryCoveragePercentage"] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+
+
+def test_inventory_coverage_unflagged_agents_count_as_not_covered_and_are_reported():
+    key = "assetInventoryCoveragePercentage"
+    out = load(key)(body([agent(1), agent(2, uninstalled=True), unflagged(3), unflagged(4, None)]))
+    result = out["transformedResponse"]
+    assert result[key] == 25.0
+    assert result["knownEndpoints"] == 4 and result["installedAgents"] == 1 and result["unreadAgentCount"] == 2
+    assert any("unreadAgentCount" in f for f in out["additionalInfo"]["evaluation"]["additionalFindings"])
+
+
+def test_inventory_coverage_explicit_false_flag_and_active_agent_count_as_installed():
+    key = "assetInventoryCoveragePercentage"
+    assert value(key, body([agent(1, uninstalled="false"), agent(2, active=False)])) == 100.0
+    # No isUninstalled, but isActive true: the agent is reporting in, the evidence the old code used.
+    assert value(key, body([unflagged(1, active=True)])) == 100.0
+    assert value(key, body([unflagged(1, active=False)])) is None
+
+
+
+def test_inventory_coverage_one_active_beside_many_unflagged_inactive_is_not_measured():
+    # Reviewer's case: one isActive true beside 99 isActive false, none with isUninstalled, read 100.0.
+    agents = [unflagged(0, active=True)] + [unflagged(i, active=False) for i in range(1, 100)]
+    out = load("assetInventoryCoveragePercentage")(body(agents))
+    assert out["transformedResponse"]["assetInventoryCoveragePercentage"] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+
+
+def test_inventory_coverage_future_check_in_never_anchors_the_window():
+    # Reviewer's case: one agent dated 2999 beside nine uninstalled ones read 100.0 (the nine fell out as stale).
+    key = "assetInventoryCoveragePercentage"
+    agents = [agent(0, last="2999-01-01T00:00:00Z")] + [agent(i, uninstalled=True, last=days_ago(2)) for i in range(1, 10)]
+    out = load(key)(body(agents))
+    result = out["transformedResponse"]
+    assert result[key] == 10.0
+    assert result["staleAgentCount"] == 0 and result["knownEndpoints"] == 10

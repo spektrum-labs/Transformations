@@ -182,16 +182,20 @@ def has_next_link(value):
 
 
 def truncated_parts(data):
-    """Names of the parts of the read that Graph says continue on another page (@odata.nextLink)."""
+    """Names of the parts of the read that did not finish: an @odata.nextLink on the user feed, any truncation
+    marker on a part (truncation_flag), or a marker the workflow set for the whole read (workflow_truncation)."""
     parts = []
     if has_next_link(data):
-        parts.append("the user feed")
+        parts.append("the user feed (@odata.nextLink)")
     for label in ["roleAssignments", "directoryRoles", "users"]:
-        if has_next_link(data.get(label)):
-            parts.append(label)
+        if truncation_flag(data.get(label)):
+            parts.append(label + " (" + truncation_flag(data.get(label)) + ")")
+    workflow = workflow_truncation(data, (ELIGIBLE_KEY,))
+    if workflow:
+        parts.append("the workflow read: " + workflow)
     for role in as_list(data.get("directoryRoles")):
         if isinstance(role, dict) and has_next_link(role.get("members")):
-            parts.append("directoryRoles members")
+            parts.append("directoryRoles members (@odata.nextLink)")
             break
     return parts
 
@@ -300,44 +304,92 @@ def eligibility_in_effect(row, now):
     return True
 
 
-def eligibility_page_problem(page):
-    """Why one page of the eligibility read is not evidence, '' when it is."""
-    if not isinstance(page, dict):
-        return "the body is not an object"
-    if "vendorErrorAsResponse" in page:
+def marker_flag(obj):
+    """paginationTruncated / truncated / iterateTruncated set on obj itself or under its response_metadata,
+    metadata or pagination block (the markers Integration-Service and the workflow engine set on a read they
+    stopped early), as 'block.name'; '' when none is set."""
+    if not isinstance(obj, dict):
+        return ""
+    blocks = [("", obj)]
+    for k in ("response_metadata", "metadata", "pagination"):
+        if isinstance(obj.get(k), dict):
+            blocks.append((k + ".", obj.get(k)))
+    for prefix, block in blocks:
+        for k in ("paginationTruncated", "truncated", "iterateTruncated"):
+            value = block.get(k)
+            number = isinstance(value, (int, float)) and not isinstance(value, bool)
+            if value is True or (number and value != 0) or str(value).strip().lower() in ("true", "1", "yes"):
+                return prefix + k
+    return ""
+
+
+def link_flag(obj):
+    """'@odata.nextLink' or '_links.next' when obj still carries a next-page link, else ''."""
+    if not isinstance(obj, dict):
+        return ""
+    if str(obj.get("@odata.nextLink") or "").strip() not in ("", "None", "null"):
+        return "@odata.nextLink"
+    links = obj.get("_links")
+    if isinstance(links, dict) and isinstance(links.get("next"), dict):
+        if str(links.get("next").get("href") or "").strip() not in ("", "None", "null"):
+            return "_links.next"
+    return ""
+
+
+def truncation_flag(obj):
+    """The truncation marker set on obj, '' when none: a next-page link (link_flag) or a marker (marker_flag)."""
+    return link_flag(obj) or marker_flag(obj)
+
+
+def cut_text(flag):
+    """'only part of it was read (...)' for a truncation marker from truncation_flag."""
+    if flag in ("@odata.nextLink", "_links.next"):
+        return "only part of it was read (" + flag + " remains)"
+    return "only part of it was read (" + flag + " is set)"
+
+
+def error_marker(obj):
+    """Why obj (a body or a wrapper around one) carries an error marker, '' when it carries none: a vendor
+    error returned as data, PSError, a non-empty error or errors, success false, an error status word, or an
+    HTTP status (statusCode, status_code, httpStatus, http_status, status) of 400 or more."""
+    if not isinstance(obj, dict):
+        return ""
+    if "vendorErrorAsResponse" in obj:
         return "Microsoft Graph refused the read (vendor error returned as data)"
-    if page.get("error") or "PSError" in page:
+    if "PSError" in obj or obj.get("error") or obj.get("errors"):
         return "Microsoft Graph returned an error"
-    for k in ("statusCode", "status_code"):
-        code = page.get(k)
+    if obj.get("success") is False or str(obj.get("success")).strip().lower() == "false":
+        return "the read reported success false"
+    for k in ("statusCode", "status_code", "httpStatus", "http_status", "status"):
+        code = obj.get(k)
         if isinstance(code, str) and code.strip().isdigit():
             code = int(code.strip())
         if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
             return "Microsoft Graph answered HTTP " + str(code)
-    if str(page.get("status") or "").strip().lower() in ("error", "failure", "failed", "not available"):
+    if str(obj.get("status") or "").strip().lower() in ("error", "failure", "failed", "fail", "not available"):
         return "the read reported an error status"
-    if not isinstance(page.get("value"), list):
-        return "the body carries no value list"
-    if str(page.get("@odata.nextLink") or "").strip() not in ("", "None", "null"):
-        return "only part of it was read (@odata.nextLink remains)"
-    for k in ("paginationTruncated", "truncated"):
-        if str(page.get(k)).strip().lower() in ("true", "1"):
-            return "only part of it was read (" + k + " is set)"
-    for row in page.get("value"):
-        if not isinstance(row, dict) or not str(row.get("principalId") or "").strip():
-            return "an instance is not an object with a principalId"
     return ""
 
 
-def eligibility_rows(data, now):
-    """(rows, problem, ended) for the PIM eligibility read.
-    Absent: (None, '', 0). Present but not read whole: (None, problem, 0). Read whole: the instances in effect at
-    `now`, and how many were left out because they had ended or not yet begun."""
-    if not isinstance(data, dict) or ELIGIBLE_KEY not in data:
-        return None, "", 0
-    body = data.get(ELIGIBLE_KEY)
-    for attempt in range(4):
-        if not isinstance(body, dict) or "value" in body:
+PAGE_MARKERS = ("value", "error", "errors", "vendorErrorAsResponse", "PSError", "statusCode", "status_code",
+                "httpStatus", "success")
+
+
+def read_pages(body):
+    """(pages, flag, problem) for one Graph read: a list body, a bare list of rows, or a list of pages, under any
+    engine wrapper. Every wrapper and page is checked for an error marker (problem) and a truncation marker (flag).
+    In a list of pages the read is whole when the LAST page has no next-page link: earlier pages of a fully read
+    list keep theirs. Any other truncation marker on any page or wrapper is a cut-off read."""
+    flag = ""
+    for attempt in range(5):
+        if not isinstance(body, dict):
+            break
+        problem = error_marker(body)
+        if problem:
+            return None, flag, problem
+        if not flag:
+            flag = truncation_flag(body)
+        if "value" in body:
             break
         moved = False
         for k in ELIGIBLE_WRAPPERS:
@@ -347,25 +399,107 @@ def eligibility_rows(data, now):
                 break
         if not moved:
             break
-    if isinstance(body, list) and len(body) > 0 and all(
-            isinstance(p, dict) and ("value" in p or "error" in p or "vendorErrorAsResponse" in p) for p in body):
+    if isinstance(body, list) and len(
+            [p for p in body if isinstance(p, dict) and len([k for k in PAGE_MARKERS if k in p]) > 0]) > 0:
         pages = body
     elif isinstance(body, list):
         pages = [{"value": body}]
     else:
         pages = [body]
+    last = len(pages) - 1
+    for index, page in enumerate(pages):
+        if not isinstance(page, dict):
+            return None, flag, "the body is not an object"
+        problem = error_marker(page)
+        if problem:
+            return None, flag, problem
+        if not isinstance(page.get("value"), list):
+            return None, flag, "the body carries no value list"
+        if not flag:
+            flag = marker_flag(page) or (link_flag(page) if index == last else "")
+    return pages, flag, ""
+
+
+def workflow_truncation(data, skip):
+    """The truncation marker the workflow set for the whole merged read, '' when none: a marker on the merged body
+    itself (paginationTruncated / truncated / iterateTruncated, or under response_metadata, metadata or pagination)
+    or under paginationStats.<any read> except the keys in `skip`, which their own reader judges."""
+    if not isinstance(data, dict):
+        return ""
+    flag = marker_flag(data)
+    if flag:
+        return flag
+    stats = data.get("paginationStats")
+    if isinstance(stats, dict):
+        for name in sorted(stats):
+            if name not in skip and truncation_flag(stats.get(name)):
+                return "paginationStats." + str(name) + "." + truncation_flag(stats.get(name))
+    return ""
+
+
+def eligibility_rows(data, now):
+    """(rows, problem, ended) for the PIM eligibility read.
+    Absent: (None, '', 0). Present but not read whole: (None, problem, 0). Read whole: the instances in effect at
+    `now`, and how many were left out because they had ended or not yet begun. An error marker or a truncation
+    marker on the body, a wrapper or a page (see read_pages), or under paginationStats.roleEligibilityScheduleInstances,
+    makes the read incomplete: eligible admins were not fully read, so the result can never pass on them."""
+    if not isinstance(data, dict) or ELIGIBLE_KEY not in data:
+        return None, "", 0
+    incomplete = ("the PIM role eligibility read (" + ELIGIBLE_ENDPOINT + ") is incomplete, so eligible admins "
+                  "were not fully read: ")
+    pages, flag, problem = read_pages(data.get(ELIGIBLE_KEY))
+    stats = data.get("paginationStats")
+    if not flag and isinstance(stats, dict) and truncation_flag(stats.get(ELIGIBLE_KEY)):
+        flag = "paginationStats." + ELIGIBLE_KEY + "." + truncation_flag(stats.get(ELIGIBLE_KEY))
+    if problem:
+        return None, incomplete + problem, 0
+    if flag:
+        return None, incomplete + cut_text(flag), 0
     rows = []
     ended = 0
     for page in pages:
-        problem = eligibility_page_problem(page)
-        if problem:
-            return None, "the PIM role eligibility read (" + ELIGIBLE_ENDPOINT + ") is incomplete: " + problem, 0
         for row in page.get("value"):
+            if not isinstance(row, dict) or not str(row.get("principalId") or "").strip() \
+                    or not str(row.get("roleDefinitionId") or "").strip():
+                return None, incomplete + "an instance is not an object with a principalId and a roleDefinitionId", 0
             if eligibility_in_effect(row, now):
                 rows.append(row)
             else:
                 ended = ended + 1
     return rows, "", ended
+
+
+# ----------------------------------------------------------------------------- ACTIVE role assignment read
+# PIM-eligible holders only ADD to an active population that was read. When the active read (roleAssignments) is
+# missing, carries an error marker anywhere on it or its wrappers, or holds a row that does not name its principal
+# and role, eligibility data never stands in for it: the result is not evaluated.
+ACTIVE_ENDPOINT = "GET /v1.0/roleManagement/directory/roleAssignments"
+ACTIVE_MISSING = ("the active role assignment read (" + ACTIVE_ENDPOINT + ") is missing; PIM-eligible holders "
+                  "never stand in for the active admins")
+
+
+def active_assignment_rows(body):
+    """(rows, problem, flag) for the ACTIVE role assignment read (see read_pages for the shapes read). problem is
+    set when the read is missing, carries an error marker, or holds a row that is not an object with a principalId
+    (or principal.id) and a roleDefinitionId; flag names a truncation marker for the caller to report."""
+    prefix = "the active role assignment read (" + ACTIVE_ENDPOINT + ") "
+    if body is None:
+        return None, ACTIVE_MISSING, ""
+    pages, flag, problem = read_pages(body)
+    if problem:
+        return None, prefix + "cannot be read: " + problem, flag
+    rows = []
+    for page in pages:
+        for row in page.get("value"):
+            principal = {}
+            if isinstance(row, dict) and isinstance(row.get("principal"), dict):
+                principal = row.get("principal")
+            if not isinstance(row, dict) or not str(row.get("principalId") or principal.get("id") or "").strip() \
+                    or not str(row.get("roleDefinitionId") or "").strip():
+                return None, (prefix + "cannot be read: an assignment is not an object naming its principal and "
+                              "its roleDefinitionId"), flag
+            rows.append(row)
+    return rows, "", flag
 
 
 def active_list_read(value):
@@ -545,7 +679,25 @@ def transform(input):
         users_by_id = {user.get("id"): user for user in users if isinstance(user, dict) and user.get("id")}
 
         has_license_data = any(isinstance(user, dict) and "assignedLicenses" in user for user in users)
+        # The ACTIVE role assignment read must be readable before PIM-eligible holders are added to it. A
+        # roleAssignments body that is an error, a refusal, {} or an unreadable page list is not evaluated, and
+        # an eligibility list never stands in for a missing active read.
+        active_problem = ""
+        active_flag = ""
+        if data.get("roleAssignments") is not None:
+            active_rows, active_problem, active_flag = active_assignment_rows(data.get("roleAssignments"))
+            if active_rows is not None:
+                data = dict(data)
+                data["roleAssignments"] = {"value": active_rows}
+        elif ELIGIBLE_KEY in data:
+            # Absent or null roleAssignments beside an eligibility read: not evaluated, whatever directoryRoles holds.
+            active_problem = ACTIVE_MISSING
+        if not active_problem and error_marker(data.get("directoryRoles")):
+            active_problem = "the directory role read (directoryRoles) cannot be read: " + error_marker(
+                data.get("directoryRoles"))
         truncated = truncated_parts(data)
+        if active_flag:
+            truncated.append("roleAssignments (" + active_flag + ")")
         active_principal_ids = collect_admin_principal_ids(data, users)
         eligible_rows, eligible_problem, eligible_ended = eligibility_rows(data, datetime.now(timezone.utc))
         eligible_read = eligible_rows is not None
@@ -561,6 +713,19 @@ def transform(input):
             or len(active_principal_ids) > 0
             or (len(eligible_principal_ids) > 0 and active_list_read(data.get("roleAssignments")))
         )
+        if active_problem:
+            result = dict(default_result)
+            result["userCount"] = user_count
+            return create_response(
+                result=result,
+                validation=validation,
+                api_errors=[active_problem],
+                fail_reasons=[active_problem],
+                recommendations=["Grant RoleManagement.Read.Directory and merge every page of " + ACTIVE_ENDPOINT
+                                 + " under roleAssignments"],
+                input_summary={"userCount": user_count, "hasLicenseData": has_license_data,
+                               "activeAssignmentsRead": False, "eligibleAssignmentsRead": eligible_read},
+            )
 
         admin_count = 0
         admins_with_mail_license = 0
@@ -610,8 +775,7 @@ def transform(input):
                 )
             if truncated:
                 unresolved.append(
-                    "the read is truncated (@odata.nextLink on " + ", ".join(truncated) + "), so later pages "
-                    "were not read"
+                    "the read is truncated (" + ", ".join(truncated) + "), so later pages were not read"
                 )
             if eligible_problem:
                 unresolved.append(eligible_problem)
@@ -658,6 +822,8 @@ def transform(input):
             # No role or licence data is no evidence: not evaluated, never a measured fail
             # (2026-10-03 fleet check: 3 Azure AD passports showed FAIL on this branch).
             no_evidence.append(feed_update_reason)
+            if eligible_problem:
+                no_evidence.append(eligible_problem)
             recommendations.append(feed_update_recommendation)
 
         result = {

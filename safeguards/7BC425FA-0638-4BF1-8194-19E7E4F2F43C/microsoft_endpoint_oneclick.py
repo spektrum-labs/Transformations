@@ -16,8 +16,12 @@ itself older than the window the fleet is dark and every dated machine is stale)
 machine whose healthStatus is Inactive has sent no signal for days (Microsoft: over seven), which is a
 dormant device -- an idle phone, a machine on a shelf -- not a broken sensor; requiring every onboarded
 machine to be Active failed tenants for devices nobody uses. Stale and Inactive machines are left out and
-reported (loggingExcludedStaleDevices, loggingExcludedInactiveDevices). Any other healthStatus
-(ImpairedCommunication, NoSensorData, ...) still fails, and no judged machine left is False.
+reported (loggingExcludedStaleDevices, loggingExcludedInactiveDevices). A machine with no readable lastSeen
+cannot be shown to be inside the window: when its healthStatus is Active it is left out and reported
+(loggingExcludedUndatedDevices), so an Active sensor without a date never counts as logging; when its
+healthStatus is Inactive it is dormant like any other; any other healthStatus (ImpairedCommunication,
+NoSensorData, missing, ...) is judged and fails, so an undated unhealthy machine always counts against logging.
+No judged machine left is False.
 """
 
 import json
@@ -49,10 +53,12 @@ def parse_time(value):
 
 
 def logging_population(onboarded):
-    """(judged, stale, inactive): the onboarded machines isEPPLoggingEnabled judges (see the docstring).
+    """(judged, stale, inactive, undated): the onboarded machines isEPPLoggingEnabled judges (see the
+    docstring), and how many were left out as stale, dormant or with no readable lastSeen.
 
     A lastSeen more than a day in the future is a clock fault and is not used for the newest-contact
-    cutoff. A machine with no readable lastSeen is judged, not dropped.
+    cutoff. A machine with no readable lastSeen is never judged as logging: left out (undated) when Active, dormant
+    when Inactive, and judged -- so it fails -- in any other health state.
     """
     now = datetime.utcnow()
     seen = [parse_time(m.get("lastSeen")) for m in onboarded]
@@ -66,14 +72,18 @@ def logging_population(onboarded):
     judged = []
     stale = 0
     inactive = 0
+    undated = 0
     for machine, when in zip(onboarded, seen):
-        if cutoff is not None and when is not None and when < cutoff:
+        health = str(machine.get("healthStatus") or "").lower()
+        if when is not None and cutoff is not None and when < cutoff:
             stale = stale + 1
-        elif str(machine.get("healthStatus") or "").lower() in DORMANT_SENSOR_STATES:
+        elif health in DORMANT_SENSOR_STATES:
             inactive = inactive + 1
+        elif when is None and health in HEALTHY_SENSOR_STATES:
+            undated = undated + 1
         else:
             judged.append(machine)
-    return judged, stale, inactive
+    return judged, stale, inactive, undated
 
 
 def is_true(value):
@@ -186,7 +196,7 @@ def evaluate_machines(data):
         if machine.get("lastSeen")
         and str(machine.get("healthStatus") or "").lower() in HEALTHY_SENSOR_STATES
     ]
-    judged, stale, inactive = logging_population(onboarded)
+    judged, stale, inactive, undated = logging_population(onboarded)
     servers = [machine for machine in eligible if "server" in str(machine.get("osPlatform") or "").lower()]
     protected_servers = [machine for machine in servers if str(machine.get("onboardingStatus") or "").lower() == "onboarded"]
     edr_servers = [machine for machine in eligible if os_class(machine) == "server"]
@@ -225,6 +235,7 @@ def evaluate_machines(data):
             "loggingJudgedDevices": 0,
             "loggingExcludedStaleDevices": 0,
             "loggingExcludedInactiveDevices": 0,
+            "loggingExcludedUndatedDevices": 0,
         }
         result.update(edr_split)
         return result
@@ -245,6 +256,7 @@ def evaluate_machines(data):
         "loggingJudgedDevices": len(judged),
         "loggingExcludedStaleDevices": stale,
         "loggingExcludedInactiveDevices": inactive,
+        "loggingExcludedUndatedDevices": undated,
     }
     result.update(edr_split)
     return result
@@ -274,8 +286,9 @@ def describe(result):
             str(result["reportingDevices"]) + " of " + str(onboarded) + " onboarded machines report an active sensor",
             "isEPPLoggingEnabled judged " + str(result["loggingJudgedDevices"]) + " onboarded machines, leaving out "
             + str(result["loggingExcludedStaleDevices"]) + " last seen more than " + str(ACTIVE_WINDOW_DAYS)
-            + " days before the newest and " + str(result["loggingExcludedInactiveDevices"])
-            + " dormant (healthStatus Inactive)",
+            + " days before the newest, " + str(result["loggingExcludedInactiveDevices"])
+            + " dormant (healthStatus Inactive) and " + str(result["loggingExcludedUndatedDevices"])
+            + " with no readable lastSeen",
             str(result["totalServerCount"]) + " eligible servers in the inventory ("
             + str(result["serverCoveragePercentage"]) + "% onboarded)",
         ],

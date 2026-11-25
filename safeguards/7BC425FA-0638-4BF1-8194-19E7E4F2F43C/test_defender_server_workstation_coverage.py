@@ -135,13 +135,14 @@ def test_oneclick_existing_fields_are_unchanged():
                 "requiredCoveragePercentage": 95, "serverCoveragePercentage": 0, "totalEndpointCount": 20,
                 "totalServerCount": 1, "eligibleDevices": 20, "protectedDevices": 19, "reportingDevices": 19}
     assert {k: result[k] for k in existing} == existing
-    logging_counts = ("loggingJudgedDevices", "loggingExcludedStaleDevices", "loggingExcludedInactiveDevices")
+    logging_counts = ("loggingJudgedDevices", "loggingExcludedStaleDevices", "loggingExcludedInactiveDevices",
+                      "loggingExcludedUndatedDevices")
     assert set(result) == set(existing) | set(SPLIT_KEYS) | set(logging_counts)
     assert response["additionalInfo"]["evaluation"]["failReasons"] == [
         "19 of 20 eligible machines are onboarded to Defender for Endpoint (95%)",
         "19 of 19 onboarded machines report an active sensor",
         "isEPPLoggingEnabled judged 19 onboarded machines, leaving out 0 last seen more than 15 days before "
-        "the newest and 0 dormant (healthStatus Inactive)",
+        "the newest, 0 dormant (healthStatus Inactive) and 0 with no readable lastSeen",
         "1 eligible servers in the inventory (0% onboarded)",
         "isEPPConfigured failed"]
 
