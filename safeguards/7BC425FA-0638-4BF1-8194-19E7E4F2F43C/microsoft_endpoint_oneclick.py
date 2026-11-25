@@ -16,10 +16,12 @@ itself older than the window the fleet is dark and every dated machine is stale)
 machine whose healthStatus is Inactive has sent no signal for days (Microsoft: over seven), which is a
 dormant device -- an idle phone, a machine on a shelf -- not a broken sensor; requiring every onboarded
 machine to be Active failed tenants for devices nobody uses. Stale and Inactive machines are left out and
-reported (loggingExcludedStaleDevices, loggingExcludedInactiveDevices). A machine with no readable
-lastSeen cannot be shown to be inside the window, so it is left out too and reported
-(loggingExcludedUndatedDevices); an Active healthStatus without a date never counts as logging. Any other
-healthStatus (ImpairedCommunication, NoSensorData, ...) still fails, and no judged machine left is False.
+reported (loggingExcludedStaleDevices, loggingExcludedInactiveDevices). A machine with no readable lastSeen
+cannot be shown to be inside the window: when its healthStatus is Active it is left out and reported
+(loggingExcludedUndatedDevices), so an Active sensor without a date never counts as logging; when its
+healthStatus is Inactive it is dormant like any other; any other healthStatus (ImpairedCommunication,
+NoSensorData, missing, ...) is judged and fails, so an undated unhealthy machine always counts against logging.
+No judged machine left is False.
 """
 
 import json
@@ -55,7 +57,8 @@ def logging_population(onboarded):
     docstring), and how many were left out as stale, dormant or with no readable lastSeen.
 
     A lastSeen more than a day in the future is a clock fault and is not used for the newest-contact
-    cutoff. A machine with no readable lastSeen is left out (undated), never judged as logging.
+    cutoff. A machine with no readable lastSeen is never judged as logging: left out (undated) when Active, dormant
+    when Inactive, and judged -- so it fails -- in any other health state.
     """
     now = datetime.utcnow()
     seen = [parse_time(m.get("lastSeen")) for m in onboarded]
@@ -71,12 +74,13 @@ def logging_population(onboarded):
     inactive = 0
     undated = 0
     for machine, when in zip(onboarded, seen):
-        if when is None:
-            undated = undated + 1
-        elif cutoff is not None and when < cutoff:
+        health = str(machine.get("healthStatus") or "").lower()
+        if when is not None and cutoff is not None and when < cutoff:
             stale = stale + 1
-        elif str(machine.get("healthStatus") or "").lower() in DORMANT_SENSOR_STATES:
+        elif health in DORMANT_SENSOR_STATES:
             inactive = inactive + 1
+        elif when is None and health in HEALTHY_SENSOR_STATES:
+            undated = undated + 1
         else:
             judged.append(machine)
     return judged, stale, inactive, undated

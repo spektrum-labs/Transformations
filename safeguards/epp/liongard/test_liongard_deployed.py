@@ -160,3 +160,54 @@ def test_devices_without_status_count_against_and_are_reported():
     assert result["unreadDeviceCount"] == 1
     failed = load("iseppdeployed")({"data": [device(1, status="Failed")]})["transformedResponse"]
     assert failed["isEPPDeployed"] is False
+
+
+# ---- second review of the follow-up: one page of a longer list, and future check-ins, are not evidence
+
+PARTIAL_PAGES = [
+    lambda row: {"Data": [row], "Pagination": {"TotalRows": 500, "CurrentPage": 1, "TotalPages": 500,
+                                               "HasMoreRows": True}},
+    lambda row: {"data": [row], "pagination": {"total": 500, "page": 1}},
+    lambda row: {"data": [row], "hasMore": True},
+    lambda row: {"data": [row], "meta": {"next": "/api/v2/next-page?page=2"}},
+    lambda row: {"response": {"data": [row], "totalCount": 500}},
+    lambda row: {"data": [row], "response_metadata": {"paginationTruncated": True}},
+]
+
+
+@pytest.mark.parametrize("name,key", [("isagentdeployed", "isAgentDeployed"), ("iseppdeployed", "isEPPDeployed")])
+@pytest.mark.parametrize("index", range(len(PARTIAL_PAGES)))
+def test_one_page_of_a_longer_list_is_not_evaluated(name, key, index):
+    # Reviewer's case: a one-row page marked 1 of 500 with more rows read True.
+    row = agent(1) if name == "isagentdeployed" else device(1)
+    result, info = run(name, PARTIAL_PAGES[index](row))
+    assert result[key] is None
+    assert info["dataCollection"]["status"] == "error"
+
+
+def test_a_complete_page_is_read():
+    body = {"Data": [agent(1), agent(2)], "Pagination": {"TotalRows": 2, "CurrentPage": 1, "TotalPages": 1,
+                                                       "HasMoreRows": False}}
+    result, _ = run("isagentdeployed", body)
+    assert result["isAgentDeployed"] is True
+
+
+@pytest.mark.parametrize("status", ["Failed", "Uninstalled"])
+def test_future_check_in_never_carries_the_fleet(status):
+    # Reviewer's case: one agent dated in the future beside nine Failed or Uninstalled ones read True.
+    agents = [{"Name": "a0", "Status": "Online", "LastHeartbeat": "2999-01-01T00:00:00.000Z"}] + \
+        [agent(i, status=status, days_ago=1) for i in range(1, 10)]
+    result, info = run("isagentdeployed", {"data": agents})
+    assert result["isAgentDeployed"] is False
+    assert result["totalAgents"] == 10 and result["deployedAgents"] == 1 and result["staleAgentCount"] == 0
+    devices = [{"id": "d0", "status": "Online", "lastSeen": "2999-01-01T00:00:00.000Z"}] + \
+        [device(i, status=status, days_ago=1) for i in range(1, 10)]
+    result, _ = run("iseppdeployed", {"data": devices})
+    assert result["isEPPDeployed"] is False and result["deployedCount"] == 1
+
+
+def test_undated_agents_cannot_stand_for_a_dark_fleet():
+    agents = [{"Name": "a0", "Status": "Online"}] + [agent(i, status="Uninstalled", days_ago=40) for i in range(1, 10)]
+    result, info = run("isagentdeployed", {"data": agents})
+    assert result["isAgentDeployed"] is None
+    assert info["dataCollection"]["status"] == "error"

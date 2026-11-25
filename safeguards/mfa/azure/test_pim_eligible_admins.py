@@ -524,6 +524,13 @@ BROKEN_ACTIVE = {
     "page_list_mixed": [graph([]), {"placeholder": 1}],
     "row_without_principal": graph([{}]),
     "absent": None,
+    # Second review of the follow-up: an empty value list beside an error marker, or inside an error wrapper.
+    "status_error": graph([], status="error"),
+    "http_status_403": graph([], httpStatus=403),
+    "success_false": graph([], success=False),
+    "errors_list": graph([], errors=["placeholder"]),
+    "error_wrapper": {"error": {"code": "Forbidden", "message": "placeholder"}, "apiResponse": graph([])},
+    "status_wrapper": {"status": "error", "response": graph([])},
 }
 
 
@@ -655,3 +662,90 @@ def test_mfa_helper_treats_truncated_eligibility_as_not_read(case):
                                      module.SECURITY_ADMIN_ROLES, [])
     assert accounts["eligibleRead"] is False and accounts["eligibleIncomplete"] is True
     assert accounts["total"] == 1
+
+
+
+# ============================================================================ second review of the follow-up
+# The active read is judged by what it says, not by its shape: an absent or null roleAssignments beside an
+# eligibility read is not evaluated whatever directoryRoles holds; a row with no roleDefinitionId cannot show
+# which role it grants (it could hide a mailbox-licensed Global Administrator); a truncation marker the workflow
+# set for the whole read (paginationTruncated, paginationStats.<read>) is honoured by every admin check; and a
+# page list whose LAST page has no next link is a whole read, even though its earlier pages keep theirs.
+
+@pytest.mark.parametrize("path,key,mode", admin_params())
+@pytest.mark.parametrize("active", ["absent", "null"])
+def test_missing_active_read_beside_a_broken_directory_role_read(path, key, mode, active):
+    body = broken_active_body(path, "absent")
+    if active == "null":
+        body["roleAssignments"] = None
+    body["directoryRoles"] = {"error": {"code": "Forbidden", "message": "placeholder"}}
+    out = load(path, mode)(body)
+    assert out["transformedResponse"][key] is not True and status(out) == "error"
+    if path in STALE or path in CLOUD or path == SEP_RA:
+        assert out["transformedResponse"][key] is None
+
+
+NO_ROLE_CHECKS = [(SEP_AZURE, SEP_KEY), (SEP_M365, SEP_KEY), (SEP_RA, SEP_KEY), (CLOUD[0], CLOUD_KEY),
+                  (CLOUD[1], CLOUD_KEY)]
+
+
+@pytest.mark.parametrize("path,key", NO_ROLE_CHECKS)
+@pytest.mark.parametrize("mode", ["native", "sandbox"])
+def test_active_row_without_role_id_is_not_evaluated(path, key, mode):
+    # The row hides a Global Administrator who holds a mailbox licence (or is synced from on-premises).
+    hidden = {"id": "ra-hidden", "principalId": OTHER, "directoryScopeId": "/",
+              "principal": {"@odata.type": USER_T, "id": OTHER}}
+    if path in CLOUD:
+        body = cloud_body([], graph([ei(ELIGIBLE)]), [cloud_user(ELIGIBLE), cloud_user(OTHER, True)])
+    else:
+        body = sep_body([], graph([ei(ELIGIBLE)]), [sep_user(ELIGIBLE, [P2]), sep_user(OTHER, [E3])])
+    body["roleAssignments"] = graph([hidden])
+    out = load(path, mode)(body)
+    assert out["transformedResponse"][key] is not True and status(out) == "error"
+
+
+WORKFLOW_MARKERS = {
+    "workflow_flag": {"paginationTruncated": True},
+    "workflow_metadata": {"response_metadata": {"paginationTruncated": "true"}},
+    "stats_roleAssignments": {"paginationStats": {"roleAssignments": {"paginationTruncated": True}}},
+    "stats_users": {"paginationStats": {"users": {"paginationTruncated": True}}},
+}
+
+
+@pytest.mark.parametrize("path,key,mode", admin_params())
+@pytest.mark.parametrize("case", sorted(WORKFLOW_MARKERS))
+def test_workflow_truncation_marker_is_honoured(path, key, mode, case):
+    body = broken_active_body(path, "absent")
+    body["roleAssignments"] = graph([])
+    body.update(copy.deepcopy(WORKFLOW_MARKERS[case]))
+    out = load(path, mode)(body)
+    assert out["transformedResponse"][key] is not True and status(out) == "error", case
+
+
+def full_page_list_body(path, last_link):
+    """Active and eligibility reads as page lists whose earlier pages keep @odata.nextLink."""
+    active = [graph([ra(ACTIVE)], **{"@odata.nextLink": NEXT}), graph([], **({"@odata.nextLink": NEXT} if last_link else {}))]
+    eligible = [graph([ei(ELIGIBLE)], **{"@odata.nextLink": NEXT}), graph([])]
+    if path in STALE:
+        body = stale_body([], eligible)
+        body["users"] = graph([stale_user(ACTIVE, 3), stale_user(ELIGIBLE, 3)])
+    elif path in CLOUD:
+        body = cloud_body([], eligible, [cloud_user(ACTIVE), cloud_user(ELIGIBLE)])
+    else:
+        body = sep_body([], eligible, [sep_user(ACTIVE, [P2]), sep_user(ELIGIBLE, [P2])])
+    body["roleAssignments"] = active
+    return body
+
+
+@pytest.mark.parametrize("path,key,mode", admin_params())
+def test_fully_read_page_list_is_whole(path, key, mode):
+    out = load(path, mode)(full_page_list_body(path, last_link=False))
+    expected = 0 if path in STALE else True
+    assert out["transformedResponse"][key] == expected and status(out) == "success"
+    assert out["transformedResponse"]["activeAdminCount"] == 1 and out["transformedResponse"]["eligibleAdminCount"] == 1
+
+
+@pytest.mark.parametrize("path,key,mode", admin_params())
+def test_page_list_whose_last_page_links_on_is_truncated(path, key, mode):
+    out = load(path, mode)(full_page_list_body(path, last_link=True))
+    assert out["transformedResponse"][key] is not True and status(out) == "error"

@@ -4,11 +4,15 @@ Percentage of endpoints known to SentinelOne (every registered agent that has no
 decommissioned, within the check-in window below) that still have the agent installed. Installation
 needs positive evidence: isUninstalled explicitly false, or (with no isUninstalled flag) isActive true,
 the evidence the earlier version used. An agent with no readable flag (isUninstalled missing or null and
-isActive not true) is left out of the count and reported as unreadAgentCount; it never counts as
-installed. Endpoints SentinelOne has never seen (no agent, no Ranger record in this response) cannot be
+isActive not true) stays in the denominator as NOT covered and is reported as unreadAgentCount; when
+more than half of the agents in the window are unreadable the result is None, not a percentage of a
+minority. Endpoints SentinelOne has never seen (no agent, no Ranger record in this response) cannot be
 counted, so this measures coverage of the SentinelOne-registered inventory. None when the agent list is
-missing, an error, or partial, when every agent is outside the window, or when no agent in the window
-carries a readable install flag.
+missing, an error, or partial, or when every agent is outside the window.
+
+A lastActiveDate more than a day after the time of the read is not a check-in (a clock fault or a
+placeholder): it is read as no date, so the agent is judged like any undated agent and the date never
+anchors the 15-day window.
 
 It deliberately does NOT gate on isActive, matching epp/sentinelone/requiredCoveragePercentage.py:
 isActive reflects only a current console session, so it is false for asleep, offline or roaming
@@ -172,11 +176,15 @@ def install_state(agent):
 
 
 def parse_seen(value):
+    """A naive-UTC check-in time, or None when unreadable or more than a day after the read (not evidence)."""
     try:
         # strptime imports _strptime, which the Token-Service sandbox refuses.
-        return datetime.fromisoformat(str(value)[:19])
+        when = datetime.fromisoformat(str(value)[:19])
     except Exception:
         return None
+    if when > datetime.utcnow() + timedelta(days=1):
+        return None
+    return when
 
 
 def fresh_agents(agents):
@@ -227,15 +235,14 @@ def transform(input):
     if registered and not known:
         return not_measured(key, "All " + str(stale) + " SentinelOne agents last checked in more than "
                             + str(ACTIVE_WINDOW_DAYS) + " days ago; there is nothing to measure.", validation)
-    readable = [a for a in known if install_state(a) is not None]
-    unread = len(known) - len(readable)
-    if known and not readable:
-        return not_measured(key, "None of the " + str(len(known)) + " SentinelOne agents carries a readable "
-                            "isUninstalled flag (or isActive true), so no agent is shown to be installed; "
+    unread = len([a for a in known if install_state(a) is None])
+    if known and unread * 2 > len(known):
+        return not_measured(key, str(unread) + " of " + str(len(known)) + " SentinelOne agents carry no readable "
+                            "isUninstalled flag (or isActive true), so install coverage cannot be shown; "
                             "nothing to measure.", validation)
-    installed = [a for a in readable if install_state(a)]
+    installed = [a for a in known if install_state(a)]
     inactive = [a for a in installed if a.get("isActive") is not None and not coerce_bool(a.get("isActive"))]
-    summary = {"knownEndpoints": len(readable), "installedAgents": len(installed),
+    summary = {"knownEndpoints": len(known), "installedAgents": len(installed),
                "inactiveInstalledAgents": len(inactive), "staleAgentCount": stale, "unreadAgentCount": unread}
     findings = ["Denominator is the SentinelOne-registered inventory; endpoints never registered with SentinelOne are not visible here."]
     if stale:
@@ -243,8 +250,7 @@ def transform(input):
                         + " days before the newest check-in and are left out of the count (staleAgentCount).")
     if unread:
         findings.append(str(unread) + " agent(s) carry no readable isUninstalled flag (missing or null, and not "
-                        "isActive true); they are left out of the count, never counted as installed "
-                        "(unreadAgentCount).")
+                        "isActive true); they count as not covered (unreadAgentCount).")
     if inactive:
         findings.append(str(len(inactive)) + " installed agent(s) have isActive=false (not online when the check ran); "
                         "they remain installed and are counted as covered.")
@@ -258,17 +264,17 @@ def transform(input):
             additional_findings=findings,
             metadata=meta,
         )
-    pct = round(len(installed) * 100.0 / len(readable), 2)
-    text = (str(len(installed)) + " of " + str(len(readable)) + " known endpoints with a readable install flag "
-            "have the SentinelOne agent installed (" + str(pct) + "%).")
+    pct = round(len(installed) * 100.0 / len(known), 2)
+    text = (str(len(installed)) + " of " + str(len(known)) + " known endpoints show the SentinelOne agent installed ("
+            + str(pct) + "%).")
     return create_response(
         # activeAgents kept for compatibility; it now carries the installed (covered) count, as in EPP.
-        result={key: pct, "knownEndpoints": len(readable), "installedAgents": len(installed),
+        result={key: pct, "knownEndpoints": len(known), "installedAgents": len(installed),
                 "activeAgents": len(installed), "staleAgentCount": stale, "unreadAgentCount": unread},
         validation=validation,
-        pass_reasons=[text] if len(installed) == len(readable) else [],
-        fail_reasons=[] if len(installed) == len(readable) else [text],
-        recommendations=[] if len(installed) == len(readable) else
+        pass_reasons=[text] if len(installed) == len(known) else [],
+        fail_reasons=[] if len(installed) == len(known) else [text],
+        recommendations=[] if len(installed) == len(known) else
         ["Reinstall the SentinelOne agent on the endpoints where it was uninstalled."],
         input_summary=summary,
         additional_findings=findings,

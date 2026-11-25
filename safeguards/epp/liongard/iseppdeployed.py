@@ -77,9 +77,74 @@ def lower_keys(obj):
     return dict((str(k).lower(), v) for k, v in obj.items()) if isinstance(obj, dict) else {}
 
 
+TRUNCATED_KEYS = ("paginationtruncated", "truncated", "iteratetruncated")
+MORE_KEYS = ("hasmore", "hasmorerows", "hasmoreitems", "hasnextpage", "moreavailable")
+NEXT_KEYS = ("next", "nextpage", "nextcursor", "nextlink", "nextpagetoken", "nextpageurl", "@odata.nextlink")
+TOTAL_KEYS = ("totalrows", "totalitems", "totalcount", "totalrecords", "totalresults", "total")
+PAGE_KEYS = ("currentpage", "page", "pagenumber")
+PAGING_BLOCKS = ("pagination", "paging", "pageinfo", "meta", "metadata", "response_metadata")
+
+
+def as_count(value):
+    """A non-negative whole number from an int or digit text, else None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def is_set(value):
+    if value is True:
+        return True
+    return str(value).strip().lower() in ("true", "1", "yes")
+
+
+def paging_problem(levels, count):
+    """Why the list read is not the whole list, '' when nothing says so. Every dict on the way to the list (and
+    its pagination / paging / pageInfo / meta / metadata / response_metadata block) is checked for a truncation
+    flag, a has-more flag, a next page, cursor or link, a total above the rows read, or a page short of the last."""
+    blocks = []
+    for level in levels:
+        low = lower_keys(level)
+        blocks.append(low)
+        for k in PAGING_BLOCKS:
+            if isinstance(low.get(k), dict):
+                blocks.append(lower_keys(low.get(k)))
+    for low in blocks:
+        for k in TRUNCATED_KEYS + MORE_KEYS:
+            if k in low and is_set(low.get(k)):
+                return "only part of the list was read (" + k + " is set)"
+        for k in NEXT_KEYS:
+            value = low.get(k)
+            if isinstance(value, (str, int, dict)) and not isinstance(value, bool) \
+                    and str(value).strip() not in ("", "None", "null", "0", "{}"):
+                return "only part of the list was read (a next page remains: " + k + ")"
+        for k in TOTAL_KEYS:
+            total = as_count(low.get(k))
+            if total is not None:
+                if total > count:
+                    return "only part of the list was read (" + str(count) + " of " + str(total) + " rows)"
+                break
+        pages = as_count(low.get("totalpages"))
+        if pages is not None:
+            current = None
+            for k in PAGE_KEYS:
+                if as_count(low.get(k)) is not None:
+                    current = as_count(low.get(k))
+                    break
+            if current is None or current < pages:
+                return "only part of the list was read (page " + str(current) + " of " + str(pages) + ")"
+    return ""
+
+
 def find_list(obj):
-    """(items, error) from the Liongard response, whatever wrapper Token-Service hands over."""
+    """(items, error) from the Liongard response, whatever wrapper Token-Service hands over. A list that the
+    response marks as one page of a longer list (paging_problem) is an error: a partial read is not judged."""
     cur = obj
+    levels = []
     for depth in range(6):
         if isinstance(cur, bytes):
             cur = cur.decode("utf-8", "replace")
@@ -89,15 +154,20 @@ def find_list(obj):
             except Exception:
                 return None, "The Liongard response is not valid JSON, so it cannot be read."
         if isinstance(cur, list):
-            return cur, None
+            problem = paging_problem(levels, len(cur))
+            return (None, "The Liongard list is incomplete: " + problem) if problem else (cur, None)
         if not isinstance(cur, dict):
             return None, None
+        levels.append(cur)
         low = lower_keys(cur)
         if low.get("error") or str(low.get("status", "")).lower() == "error" or low.get("errors"):
             detail = low.get("errors") or low.get("message") or low.get("error") or "error"
             return None, "Liongard returned an error instead of a list: " + json.dumps(detail)[:300]
         for key in LIST_KEYS:
             if isinstance(low.get(key), list):
+                problem = paging_problem(levels, len(low[key]))
+                if problem:
+                    return None, "The Liongard list is incomplete: " + problem
                 return low[key], None
         nxt = None
         for key in ("response", "apiresponse", "api_response", "result", "data"):
@@ -126,10 +196,15 @@ def epoch(value):
 
 
 def last_seen(item):
+    """The last-seen time as epoch seconds, or None when unreadable or more than a day after the read: a
+    check-in in the future is not evidence and never anchors the 15-day window."""
     low = lower_keys(item)
     for key in SEEN_KEYS:
         if key in low:
-            return epoch(low[key])
+            when = epoch(low[key])
+            if when is not None and when > datetime.now(timezone.utc).timestamp() + 86400:
+                return None
+            return when
     return None
 
 
@@ -228,6 +303,9 @@ def transform(input):
         if not judged:
             return not_measured(key, "All " + str(stale) + " Liongard devices were last seen more than "
                                 + str(ACTIVE_WINDOW_DAYS) + " days ago; there is nothing to measure.")
+        if stale and not any(last_seen(i) is not None for i in judged):
+            return not_measured(key, "Every dated Liongard device was last seen more than " + str(ACTIVE_WINDOW_DAYS)
+                                + " days ago; the devices with no readable last-seen time cannot stand for the fleet.")
         unread = len([d for d in judged if not has_evidence(d)])
         if unread == len(judged):
             return not_measured(key, "None of the " + str(len(judged)) + " Liongard devices carries a readable "

@@ -349,10 +349,27 @@ def eligibility_in_effect(row, now):
     return True
 
 
-def truncation_flag(obj):
-    """The truncation marker set on obj, '' when none: an @odata.nextLink or _links.next href still set, or
-    paginationTruncated / truncated / iterateTruncated on the object itself or under its response_metadata,
-    metadata or pagination block (the markers Integration-Service and the workflow engine use for a cut-off read)."""
+def marker_flag(obj):
+    """paginationTruncated / truncated / iterateTruncated set on obj itself or under its response_metadata,
+    metadata or pagination block (the markers Integration-Service and the workflow engine set on a read they
+    stopped early), as 'block.name'; '' when none is set."""
+    if not isinstance(obj, dict):
+        return ""
+    blocks = [("", obj)]
+    for k in ("response_metadata", "metadata", "pagination"):
+        if isinstance(obj.get(k), dict):
+            blocks.append((k + ".", obj.get(k)))
+    for prefix, block in blocks:
+        for k in ("paginationTruncated", "truncated", "iterateTruncated"):
+            value = block.get(k)
+            number = isinstance(value, (int, float)) and not isinstance(value, bool)
+            if value is True or (number and value != 0) or str(value).strip().lower() in ("true", "1", "yes"):
+                return prefix + k
+    return ""
+
+
+def link_flag(obj):
+    """'@odata.nextLink' or '_links.next' when obj still carries a next-page link, else ''."""
     if not isinstance(obj, dict):
         return ""
     if str(obj.get("@odata.nextLink") or "").strip() not in ("", "None", "null"):
@@ -361,16 +378,12 @@ def truncation_flag(obj):
     if isinstance(links, dict) and isinstance(links.get("next"), dict):
         if str(links.get("next").get("href") or "").strip() not in ("", "None", "null"):
             return "_links.next"
-    blocks = [("", obj)]
-    for k in ("response_metadata", "metadata", "pagination"):
-        if isinstance(obj.get(k), dict):
-            blocks.append((k + ".", obj.get(k)))
-    for prefix, block in blocks:
-        for k in ("paginationTruncated", "truncated", "iterateTruncated"):
-            value = block.get(k)
-            if value is True or str(value).strip().lower() in ("true", "1"):
-                return prefix + k
     return ""
+
+
+def truncation_flag(obj):
+    """The truncation marker set on obj, '' when none: a next-page link (link_flag) or a marker (marker_flag)."""
+    return link_flag(obj) or marker_flag(obj)
 
 
 def cut_text(flag):
@@ -380,58 +393,48 @@ def cut_text(flag):
     return "only part of it was read (" + flag + " is set)"
 
 
-def graph_page_problem(page):
-    """Why one Graph list page is not readable evidence (an error, a refusal, no value list), '' when it is."""
-    if not isinstance(page, dict):
-        return "the body is not an object"
-    if "vendorErrorAsResponse" in page:
+def error_marker(obj):
+    """Why obj (a body or a wrapper around one) carries an error marker, '' when it carries none: a vendor
+    error returned as data, PSError, a non-empty error or errors, success false, an error status word, or an
+    HTTP status (statusCode, status_code, httpStatus, http_status, status) of 400 or more."""
+    if not isinstance(obj, dict):
+        return ""
+    if "vendorErrorAsResponse" in obj:
         return "Microsoft Graph refused the read (vendor error returned as data)"
-    if page.get("error") or "PSError" in page:
+    if "PSError" in obj or obj.get("error") or obj.get("errors"):
         return "Microsoft Graph returned an error"
-    for k in ("statusCode", "status_code"):
-        code = page.get(k)
+    if obj.get("success") is False or str(obj.get("success")).strip().lower() == "false":
+        return "the read reported success false"
+    for k in ("statusCode", "status_code", "httpStatus", "http_status", "status"):
+        code = obj.get(k)
         if isinstance(code, str) and code.strip().isdigit():
             code = int(code.strip())
         if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
             return "Microsoft Graph answered HTTP " + str(code)
-    if str(page.get("status") or "").strip().lower() in ("error", "failure", "failed", "not available"):
+    if str(obj.get("status") or "").strip().lower() in ("error", "failure", "failed", "fail", "not available"):
         return "the read reported an error status"
-    if not isinstance(page.get("value"), list):
-        return "the body carries no value list"
     return ""
 
 
-def eligibility_page_problem(page):
-    """Why one page of the eligibility read is not evidence, '' when it is."""
-    problem = graph_page_problem(page)
-    if problem:
-        return problem
-    flag = truncation_flag(page)
-    if flag:
-        return cut_text(flag)
-    for row in page.get("value"):
-        if not isinstance(row, dict) or not str(row.get("principalId") or "").strip():
-            return "an instance is not an object with a principalId"
-    return ""
+PAGE_MARKERS = ("value", "error", "errors", "vendorErrorAsResponse", "PSError", "statusCode", "status_code",
+                "httpStatus", "success")
 
 
-def eligibility_rows(data, now):
-    """(rows, problem, ended) for the PIM eligibility read.
-    Absent: (None, '', 0). Present but not read whole: (None, problem, 0). Read whole: the instances in effect at
-    `now`, and how many were left out because they had ended or not yet begun. A truncation marker on the body, on
-    any wrapper around it, or under paginationStats.roleEligibilityScheduleInstances makes the read incomplete:
-    eligible admins were not fully read, so the result can never pass on them."""
-    if not isinstance(data, dict) or ELIGIBLE_KEY not in data:
-        return None, "", 0
-    incomplete = ("the PIM role eligibility read (" + ELIGIBLE_ENDPOINT + ") is incomplete, so eligible admins "
-                  "were not fully read: ")
-    body = data.get(ELIGIBLE_KEY)
-    flag = truncation_flag(body)
-    stats = data.get("paginationStats")
-    if not flag and isinstance(stats, dict) and truncation_flag(stats.get(ELIGIBLE_KEY)):
-        flag = "paginationStats." + ELIGIBLE_KEY + "." + truncation_flag(stats.get(ELIGIBLE_KEY))
-    for attempt in range(4):
-        if not isinstance(body, dict) or "value" in body:
+def read_pages(body):
+    """(pages, flag, problem) for one Graph read: a list body, a bare list of rows, or a list of pages, under any
+    engine wrapper. Every wrapper and page is checked for an error marker (problem) and a truncation marker (flag).
+    In a list of pages the read is whole when the LAST page has no next-page link: earlier pages of a fully read
+    list keep theirs. Any other truncation marker on any page or wrapper is a cut-off read."""
+    flag = ""
+    for attempt in range(5):
+        if not isinstance(body, dict):
+            break
+        problem = error_marker(body)
+        if problem:
+            return None, flag, problem
+        if not flag:
+            flag = truncation_flag(body)
+        if "value" in body:
             break
         moved = False
         for k in ELIGIBLE_WRAPPERS:
@@ -441,24 +444,69 @@ def eligibility_rows(data, now):
                 break
         if not moved:
             break
-        if not flag:
-            flag = truncation_flag(body)
-    if flag:
-        return None, incomplete + cut_text(flag), 0
-    if isinstance(body, list) and len(body) > 0 and all(
-            isinstance(p, dict) and ("value" in p or "error" in p or "vendorErrorAsResponse" in p) for p in body):
+    if isinstance(body, list) and len(
+            [p for p in body if isinstance(p, dict) and len([k for k in PAGE_MARKERS if k in p]) > 0]) > 0:
         pages = body
     elif isinstance(body, list):
         pages = [{"value": body}]
     else:
         pages = [body]
+    last = len(pages) - 1
+    for index, page in enumerate(pages):
+        if not isinstance(page, dict):
+            return None, flag, "the body is not an object"
+        problem = error_marker(page)
+        if problem:
+            return None, flag, problem
+        if not isinstance(page.get("value"), list):
+            return None, flag, "the body carries no value list"
+        if not flag:
+            flag = marker_flag(page) or (link_flag(page) if index == last else "")
+    return pages, flag, ""
+
+
+def workflow_truncation(data, skip):
+    """The truncation marker the workflow set for the whole merged read, '' when none: a marker on the merged body
+    itself (paginationTruncated / truncated / iterateTruncated, or under response_metadata, metadata or pagination)
+    or under paginationStats.<any read> except the keys in `skip`, which their own reader judges."""
+    if not isinstance(data, dict):
+        return ""
+    flag = marker_flag(data)
+    if flag:
+        return flag
+    stats = data.get("paginationStats")
+    if isinstance(stats, dict):
+        for name in sorted(stats):
+            if name not in skip and truncation_flag(stats.get(name)):
+                return "paginationStats." + str(name) + "." + truncation_flag(stats.get(name))
+    return ""
+
+
+def eligibility_rows(data, now):
+    """(rows, problem, ended) for the PIM eligibility read.
+    Absent: (None, '', 0). Present but not read whole: (None, problem, 0). Read whole: the instances in effect at
+    `now`, and how many were left out because they had ended or not yet begun. An error marker or a truncation
+    marker on the body, a wrapper or a page (see read_pages), or under paginationStats.roleEligibilityScheduleInstances,
+    makes the read incomplete: eligible admins were not fully read, so the result can never pass on them."""
+    if not isinstance(data, dict) or ELIGIBLE_KEY not in data:
+        return None, "", 0
+    incomplete = ("the PIM role eligibility read (" + ELIGIBLE_ENDPOINT + ") is incomplete, so eligible admins "
+                  "were not fully read: ")
+    pages, flag, problem = read_pages(data.get(ELIGIBLE_KEY))
+    stats = data.get("paginationStats")
+    if not flag and isinstance(stats, dict) and truncation_flag(stats.get(ELIGIBLE_KEY)):
+        flag = "paginationStats." + ELIGIBLE_KEY + "." + truncation_flag(stats.get(ELIGIBLE_KEY))
+    if problem:
+        return None, incomplete + problem, 0
+    if flag:
+        return None, incomplete + cut_text(flag), 0
     rows = []
     ended = 0
     for page in pages:
-        problem = eligibility_page_problem(page)
-        if problem:
-            return None, incomplete + problem, 0
         for row in page.get("value"):
+            if not isinstance(row, dict) or not str(row.get("principalId") or "").strip() \
+                    or not str(row.get("roleDefinitionId") or "").strip():
+                return None, incomplete + "an instance is not an object with a principalId and a roleDefinitionId", 0
             if eligibility_in_effect(row, now):
                 rows.append(row)
             else:
@@ -509,15 +557,15 @@ def is_page_list(body):
 def section_problem(name, body):
     """Why a section cannot be read as evidence, '' when it can. A body may be one page or a list of pages."""
     if is_page_list(body):
-        for page in body:
-            problem = page_problem(name, page)
+        for index, page in enumerate(body):
+            problem = page_problem(name, page, index == len(body) - 1)
             if problem:
                 return problem
         return ""
-    return page_problem(name, body)
+    return page_problem(name, body, True)
 
 
-def page_problem(name, body):
+def page_problem(name, body, last):
     endpoint = ENDPOINTS[name]
     marker = marker_of(body)
     if marker is not None:
@@ -532,6 +580,14 @@ def page_problem(name, body):
         code = status_code_of(body)
         if code is not None and code >= 400:
             return "Microsoft Graph answered " + endpoint + " with HTTP " + str(code)
+        problem = error_marker(body)
+        if problem:
+            return problem + " (" + endpoint + ")"
+        if marker_flag(body):
+            return endpoint + " was not read to the end (" + marker_flag(body) + " is set)"
+        if not last:
+            # An earlier page of a fully read page list keeps its next-page link; only the last page's counts.
+            body = dict((k, v) for k, v in body.items() if k not in ("@odata.nextLink", "_links"))
         return truncation_text(body, endpoint)
     return ""
 
@@ -592,6 +648,9 @@ def evaluate(data, now):
     if not isinstance(data, dict):
         return unevaluated("the response is not an object with roleAssignments and users")
     top = truncation_text(data, "the workflow read")
+    if not top and workflow_truncation(data, (ELIGIBLE_KEY,)):
+        # The shared truncation_text does not read iterateTruncated or paginationStats: the Entra reads do.
+        top = "the workflow read was not read to the end (" + workflow_truncation(data, (ELIGIBLE_KEY,)) + " is set)"
     if top:
         return unevaluated(top)
     bodies = {}

@@ -296,8 +296,12 @@ def test_reporting_machine_with_null_health_still_fails_logging(loader):
 
 
 @pytest.mark.parametrize("loader", RUNNERS)
-def test_no_readable_health_on_any_judged_machine_is_not_measured(loader):
-    out = loader("epp_transform")(machines(undated_blind(), undated_blind()))
-    assert collected(out) == "error"
+def test_nothing_reporting_beside_unreadable_health_is_a_measured_fail(loader):
+    # Nothing reporting is a measured False (as before #1442); unreadable machines never make it a pass.
+    blind = undated_blind()
+    nulled = undated_blind()
+    nulled["healthStatus"] = None
+    out = loader("epp_transform")(machines(blind, nulled))
+    assert collected(out) == "success"
     for key in EPP_KEYS:
-        assert out["transformedResponse"][key] is None, key
+        assert out["transformedResponse"][key] is False, key

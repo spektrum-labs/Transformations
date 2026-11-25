@@ -153,3 +153,24 @@ def test_machine_without_last_seen_is_left_out_and_reported():
     reasons = " ".join(response["additionalInfo"]["evaluation"]["passReasons"]
                        + response["additionalInfo"]["evaluation"]["failReasons"])
     assert "1 with no readable lastSeen" in reasons
+
+
+def test_undated_unhealthy_machines_count_against_logging():
+    # Second review: one dated Active machine beside 999 undated ImpairedCommunication machines read True.
+    machines = [{"onboardingStatus": "Onboarded", "healthStatus": "Active", "lastSeen": ago(1), "osPlatform": "Windows11"}]
+    machines += [{"onboardingStatus": "Onboarded", "healthStatus": "ImpairedCommunication", "osPlatform": "Windows11"}
+                 for _ in range(999)]
+    result = _result({"value": machines})
+    assert result["isEPPLoggingEnabled"] is False
+    assert result["loggingJudgedDevices"] == 1000 and result["loggingExcludedUndatedDevices"] == 0
+
+
+def test_undated_machine_states_each_go_their_own_way():
+    base = {"onboardingStatus": "Onboarded", "osPlatform": "Windows11"}
+    dated = dict(base, healthStatus="Active", lastSeen=ago(1))
+    result = _result({"value": [dated, dict(base, healthStatus="Inactive"), dict(base, healthStatus="Active")]})
+    assert result["isEPPLoggingEnabled"] is True
+    assert result["loggingExcludedInactiveDevices"] == 1 and result["loggingExcludedUndatedDevices"] == 1
+    for health in ("NoSensorData", None):
+        result = _result({"value": [dated, dict(base, healthStatus=health)]})
+        assert result["isEPPLoggingEnabled"] is False, health
